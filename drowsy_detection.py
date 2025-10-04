@@ -6,10 +6,10 @@ from mediapipe.python.solutions.drawing_utils import _normalized_to_pixel_coordi
 
 
 def get_mediapipe_app(
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5,
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
 ):
     """Initialize and return Mediapipe FaceMesh Solution Graph object"""
     face_mesh = mp.solutions.face_mesh.FaceMesh(
@@ -75,10 +75,32 @@ def calculate_avg_ear(landmarks, left_eye_idxs, right_eye_idxs, image_w, image_h
     return Avg_EAR, (left_lm_coordinates, right_lm_coordinates)
 
 
+def calculate_mar(landmarks, outer_idxs, inner_idxs, image_w, image_h):
+    # Calculate Mouth aspect ratio
+
+    outer_mar, outer_lm_coordinates = get_ear(landmarks, outer_idxs, image_w, image_h)
+    inner_mar, inner_lm_coordinates = get_ear(landmarks, inner_idxs, image_w, image_h)
+    Avg_MAR = (outer_mar + inner_mar) / 2.0
+
+    return Avg_MAR, (outer_lm_coordinates, inner_lm_coordinates)
+
+
 def plot_eye_landmarks(frame, left_lm_coordinates, right_lm_coordinates, color):
     if not frame.flags.writeable:
         frame = frame.copy()
     for lm_coordinates in [left_lm_coordinates, right_lm_coordinates]:
+        if lm_coordinates:
+            for coord in lm_coordinates:
+                cv2.circle(frame, coord, 2, color, -1)
+
+    # frame = cv2.flip(frame, 1)
+    return frame
+
+
+def plot_mouth_landmarks(frame, outer, inner, color):
+    if not frame.flags.writeable:
+        frame = frame.copy()
+    for lm_coordinates in [outer, inner]:
         if lm_coordinates:
             for coord in lm_coordinates:
                 cv2.circle(frame, coord, 2, color, -1)
@@ -98,10 +120,25 @@ class VideoFrameHandler:
         Initialize the necessary constants, mediapipe app
         and tracker variables
         """
-        # Left and right eye chosen landmarks.
+        # Left and right eye chosen landmarks. LANDMARKS EYES
         self.eye_idxs = {
             "left": [362, 385, 387, 263, 373, 380],
             "right": [33, 160, 158, 133, 153, 144],
+        }
+
+        self.mouth_idxs = {
+            "outer_lip": [
+                61, 146, 91, 181, 84, 17, 314, 405,
+                321, 375, 291, 308, 324, 318, 402, 317,
+                14, 87, 178, 88, 95, 185, 40, 39, 37, 0,
+                267, 269, 270, 409, 415, 310, 311, 312,
+                13, 82, 81, 80, 191, 61
+            ],
+            "inner_lip": [
+                78, 95, 88, 178, 87, 14, 317, 402,
+                318, 324, 308, 291, 375, 321, 405, 314,
+                17, 84, 181, 91, 146, 61, 78
+            ],
         }
 
         # Used for coloring landmark points.
@@ -148,8 +185,12 @@ class VideoFrameHandler:
 
         if results.multi_face_landmarks:
             landmarks = results.multi_face_landmarks[0].landmark
-            EAR, coordinates = calculate_avg_ear(landmarks, self.eye_idxs["left"], self.eye_idxs["right"], frame_w, frame_h)
+            EAR, coordinates = calculate_avg_ear(landmarks, self.eye_idxs["left"], self.eye_idxs["right"], frame_w,
+                                                 frame_h)
+            MAR, mouth_coordinates = calculate_mar(landmarks, self.mouth_idxs["inner_lip"],
+                                                   self.mouth_idxs["outer_lip"], frame_w, frame_h)
             frame = plot_eye_landmarks(frame, coordinates[0], coordinates[1], self.state_tracker["COLOR"])
+            frame = plot_mouth_landmarks(frame, mouth_coordinates[0], mouth_coordinates[1], self.state_tracker["COLOR"])
 
             if EAR < thresholds["EAR_THRESH"]:
 

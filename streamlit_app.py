@@ -13,7 +13,7 @@ from drowsy_detection import VideoFrameHandler
 # Define the audio file to use.
 alarm_file_path = os.path.join("audio", "wake_up.wav")
 
-# Streamlit Components
+# Streamlit Components web page config
 st.set_page_config(
     page_title="",
     page_icon="",
@@ -26,6 +26,7 @@ st.set_page_config(
 
 col1, col2 = st.columns(spec=[6, 2], gap="medium")
 
+# Sidebar
 with col1:
     st.title("")
     with st.container():
@@ -38,13 +39,14 @@ with col1:
             # Lowest valid value of Eye Aspect Ratio. Ideal values [0.15, 0.2].
             EAR_THRESH = st.slider("Separación de ojo:", 0.0, 0.4, 0.18, 0.01)
 
+# Store the thresholds in a dictionary to pass to the callback function.
 thresholds = {
     "EAR_THRESH": EAR_THRESH,
     "WAIT_TIME": WAIT_TIME,
 }
 
 # For streamlit-webrtc
-video_handler = VideoFrameHandler()
+video_handler = VideoFrameHandler() # Initialize the video frame handler (drowsiness detection)
 audio_handler = AudioFrameHandler(sound_file_path=alarm_file_path)
 
 lock = threading.Lock()  # For thread-safe access & to prevent race-condition.
@@ -52,7 +54,9 @@ shared_state = {"play_alarm": False}
 
 
 def video_frame_callback(frame: av.VideoFrame):
+    """Callback function to process video frames."""
     frame = frame.to_ndarray(format="bgr24")  # Decode and convert frame to RGB
+    print(frame)
 
     frame, play_alarm = video_handler.process(frame, thresholds)  # Process frame
     with lock:
@@ -66,11 +70,9 @@ def audio_frame_callback(frame: av.AudioFrame):
         play_alarm = shared_state["play_alarm"]
 
     new_frame: av.AudioFrame = audio_handler.process(frame, play_sound=play_alarm)
-    return new_frame
+    return new_frame3
 
-
-# https://github.com/whitphx/streamlit-webrtc/blob/main/streamlit_webrtc/config.py
-
+# WebRTC streamer component (protocol that handles video and audio streaming)
 with col1:
     ctx = webrtc_streamer(
         key="drowsiness-detection",
@@ -81,6 +83,3 @@ with col1:
         video_html_attrs=VideoHTMLAttributes(autoPlay=True, controls=False, muted=False),
     )
 
-# with col2:
-    # Banner for newsletter subscription, jobs, and consulting.
-    # st.markdown(css_string, unsafe_allow_html=True)
