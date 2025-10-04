@@ -1,0 +1,5 @@
+/.vscode
+__pycache__
+mediapipe-env/
+Driver-Drowsiness-detection-using-Mediapipe-in-Python.zip
+.DS_Store
