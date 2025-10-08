@@ -12,6 +12,7 @@ from drowsy_detection import VideoFrameHandler
 
 # Define the audio file to use.
 alarm_file_path = os.path.join("audio", "wake_up.wav")
+print(alarm_file_path)
 
 # Streamlit Components web page config
 st.set_page_config(
@@ -56,7 +57,7 @@ shared_state = {"play_alarm": False}
 def video_frame_callback(frame: av.VideoFrame):
     """Callback function to process video frames."""
     frame = frame.to_ndarray(format="bgr24")  # Decode and convert frame to RGB
-    print(frame)
+    # print(frame)
 
     frame, play_alarm = video_handler.process(frame, thresholds)  # Process frame
     with lock:
@@ -70,7 +71,7 @@ def audio_frame_callback(frame: av.AudioFrame):
         play_alarm = shared_state["play_alarm"]
 
     new_frame: av.AudioFrame = audio_handler.process(frame, play_sound=play_alarm)
-    return new_frame3
+    return new_frame
 
 # WebRTC streamer component (protocol that handles video and audio streaming)
 with col1:

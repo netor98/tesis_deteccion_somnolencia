@@ -93,7 +93,6 @@ def plot_eye_landmarks(frame, left_lm_coordinates, right_lm_coordinates, color):
             for coord in lm_coordinates:
                 cv2.circle(frame, coord, 2, color, -1)
 
-    # frame = cv2.flip(frame, 1)
     return frame
 
 
@@ -151,6 +150,7 @@ class VideoFrameHandler:
 
         # For tracking counters and sharing states in and out of callbacks.
         self.state_tracker = {
+
             "start_time": time.perf_counter(),
             "DROWSY_TIME": 0.0,  # Holds the amount of time passed with EAR < EAR_THRESH
             "COLOR": self.GREEN,
@@ -204,7 +204,7 @@ class VideoFrameHandler:
 
                 if self.state_tracker["DROWSY_TIME"] >= thresholds["WAIT_TIME"]:
                     self.state_tracker["play_alarm"] = True
-                    plot_text(frame, "WAKE UP! WAKE UP", ALM_txt_pos, self.state_tracker["COLOR"])
+                    plot_text(frame, "ALERTA!!!", ALM_txt_pos, self.state_tracker["COLOR"])
 
             else:
                 self.state_tracker["start_time"] = time.perf_counter()
