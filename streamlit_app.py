@@ -40,9 +40,16 @@ with col1:
             # Lowest valid value of Eye Aspect Ratio. Ideal values [0.15, 0.2].
             EAR_THRESH = st.slider("Separación de ojo:", 0.0, 0.4, 0.18, 0.01)
 
+        with st.container():
+            c3, c4 = st.columns(spec=[1, 1])
+            with c3:
+                # Lowest valid value of Mouth Aspect Ratio. Ideal values [0.5, 0.7].
+                MAR_THRESH = st.slider("Separación de boca:", 0.0, 1.0, 0.6, 0.01)
+
 # Store the thresholds in a dictionary to pass to the callback function.
 thresholds = {
     "EAR_THRESH": EAR_THRESH,
+    "MAR_THRESH": MAR_THRESH,
     "WAIT_TIME": WAIT_TIME,
 }
 

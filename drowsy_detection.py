@@ -75,14 +75,42 @@ def calculate_avg_ear(landmarks, left_eye_idxs, right_eye_idxs, image_w, image_h
     return Avg_EAR, (left_lm_coordinates, right_lm_coordinates)
 
 
-def calculate_mar(landmarks, outer_idxs, inner_idxs, image_w, image_h):
-    # Calculate Mouth aspect ratio
+def calculate_mar(landmarks, mouth_idxs, image_w, image_h):
+    """
+    Calculate Mouth Aspect Ratio.
 
-    outer_mar, outer_lm_coordinates = get_ear(landmarks, outer_idxs, image_w, image_h)
-    inner_mar, inner_lm_coordinates = get_ear(landmarks, inner_idxs, image_w, image_h)
-    Avg_MAR = (outer_mar + inner_mar) / 2.0
+    Args:
+        landmarks: (list) Detected landmarks list
+        mouth_idxs: (dict) Index positions of the chosen landmarks for the mouth
+        image_w: (int) Width of captured frame
+        image_h: (int) Height of captured frame
 
-    return Avg_MAR, (outer_lm_coordinates, inner_lm_coordinates)
+    Returns:
+        mar: (float) Mouth aspect ratio
+        coords_points: (list) Coordinates of the mouth landmarks
+    """
+    try:
+        # Get the coordinates of the 8 mouth landmarks
+        coords_points = []
+        for i in mouth_idxs.values():
+            lm = landmarks[i]
+            coord = denormalize_coordinates(lm.x, lm.y, image_w, image_h)
+            coords_points.append(coord)
+
+        # Calculate the distances
+        ab_dist = distance(coords_points[0], coords_points[1])
+        cd_dist = distance(coords_points[2], coords_points[3])
+        ef_dist = distance(coords_points[4], coords_points[5])
+        gh_dist = distance(coords_points[6], coords_points[7])
+
+        # Calculate the Mouth Aspect Ratio (MAR)
+        mar = (cd_dist + ef_dist + gh_dist) / (3.0 * ab_dist)
+
+    except:
+        mar = 0.0
+        coords_points = None
+
+    return mar, coords_points
 
 
 def plot_eye_landmarks(frame, left_lm_coordinates, right_lm_coordinates, color):
@@ -96,13 +124,12 @@ def plot_eye_landmarks(frame, left_lm_coordinates, right_lm_coordinates, color):
     return frame
 
 
-def plot_mouth_landmarks(frame, outer, inner, color):
+def plot_mouth_landmarks(frame, lm_coordinates, color):
     if not frame.flags.writeable:
         frame = frame.copy()
-    for lm_coordinates in [outer, inner]:
-        if lm_coordinates:
-            for coord in lm_coordinates:
-                cv2.circle(frame, coord, 2, color, -1)
+    if lm_coordinates:
+        for coord in lm_coordinates:
+            cv2.circle(frame, coord, 2, color, -1)
 
     frame = cv2.flip(frame, 1)
     return frame
@@ -126,19 +153,15 @@ class VideoFrameHandler:
         }
 
         self.mouth_idxs = {
-            "outer_lip": [
-                61, 146, 91, 181, 84, 17, 314, 405,
-                321, 375, 291, 308, 324, 318, 402, 317,
-                14, 87, 178, 88, 95, 185, 40, 39, 37, 0,
-                267, 269, 270, 409, 415, 310, 311, 312,
-                13, 82, 81, 80, 191, 61
-            ],
-            "inner_lip": [
-                78, 95, 88, 178, 87, 14, 317, 402,
-                318, 324, 308, 291, 375, 321, 405, 314,
-                17, 84, 181, 91, 146, 61, 78
-            ],
-        }
+        "A": 61,   # left mouth corner
+    "B": 291,  # right mouth corner
+    "C": 78,   # upper left lip
+    "D": 308,  # upper right lip
+    "E": 13,   # upper center lip
+    "F": 14,   # lower center lip
+    "G": 82,   # lower left lip
+    "H": 312,  # lower right lip
+}
 
         # Used for coloring landmark points.
         # Its value depends on the current EAR value.
@@ -150,14 +173,16 @@ class VideoFrameHandler:
 
         # For tracking counters and sharing states in and out of callbacks.
         self.state_tracker = {
-
-            "start_time": time.perf_counter(),
+            "drowsy_start_time": time.perf_counter(),
+            "yawn_start_time": time.perf_counter(),
             "DROWSY_TIME": 0.0,  # Holds the amount of time passed with EAR < EAR_THRESH
+            "YAWN_TIME": 0.0,  # Holds the amount of time passed with MAR > MAR_THRESH
             "COLOR": self.GREEN,
             "play_alarm": False,
         }
 
         self.EAR_txt_pos = (10, 30)
+        self.MAR_txt_pos = (10, 60)
 
     def process(self, frame: np.array, thresholds: dict):
         """
@@ -179,6 +204,7 @@ class VideoFrameHandler:
         frame_h, frame_w, _ = frame.shape
 
         DROWSY_TIME_txt_pos = (10, int(frame_h // 2 * 1.7))
+        YAWN_TIME_txt_pos = (10, int(frame_h // 2 * 1.6))
         ALM_txt_pos = (10, int(frame_h // 2 * 1.85))
 
         results = self.facemesh_model.process(frame)
@@ -187,19 +213,17 @@ class VideoFrameHandler:
             landmarks = results.multi_face_landmarks[0].landmark
             EAR, coordinates = calculate_avg_ear(landmarks, self.eye_idxs["left"], self.eye_idxs["right"], frame_w,
                                                  frame_h)
-            MAR, mouth_coordinates = calculate_mar(landmarks, self.mouth_idxs["inner_lip"],
-                                                   self.mouth_idxs["outer_lip"], frame_w, frame_h)
+            MAR, mouth_coordinates = calculate_mar(landmarks, self.mouth_idxs, frame_w, frame_h)
             frame = plot_eye_landmarks(frame, coordinates[0], coordinates[1], self.state_tracker["COLOR"])
-            frame = plot_mouth_landmarks(frame, mouth_coordinates[0], mouth_coordinates[1], self.state_tracker["COLOR"])
+            frame = plot_mouth_landmarks(frame, mouth_coordinates, self.state_tracker["COLOR"])
 
             if EAR < thresholds["EAR_THRESH"]:
-
                 # Increase DROWSY_TIME to track the time period with EAR less than the threshold
                 # and reset the start_time for the next iteration.
                 end_time = time.perf_counter()
 
-                self.state_tracker["DROWSY_TIME"] += end_time - self.state_tracker["start_time"]
-                self.state_tracker["start_time"] = end_time
+                self.state_tracker["DROWSY_TIME"] += end_time - self.state_tracker["drowsy_start_time"]
+                self.state_tracker["drowsy_start_time"] = end_time
                 self.state_tracker["COLOR"] = self.RED
 
                 if self.state_tracker["DROWSY_TIME"] >= thresholds["WAIT_TIME"]:
@@ -207,19 +231,42 @@ class VideoFrameHandler:
                     plot_text(frame, "ALERTA!!!", ALM_txt_pos, self.state_tracker["COLOR"])
 
             else:
-                self.state_tracker["start_time"] = time.perf_counter()
+                self.state_tracker["drowsy_start_time"] = time.perf_counter()
                 self.state_tracker["DROWSY_TIME"] = 0.0
                 self.state_tracker["COLOR"] = self.GREEN
                 self.state_tracker["play_alarm"] = False
 
+            if MAR > thresholds["MAR_THRESH"]:
+                # Increase YAWN_TIME to track the time period with MAR greater than the threshold
+                # and reset the start_time for the next iteration.
+                end_time = time.perf_counter()
+
+                self.state_tracker["YAWN_TIME"] += end_time - self.state_tracker["yawn_start_time"]
+                self.state_tracker["yawn_start_time"] = end_time
+                self.state_tracker["COLOR"] = self.RED
+
+                if self.state_tracker["YAWN_TIME"] >= thresholds["WAIT_TIME"]:
+                    self.state_tracker["play_alarm"] = True
+                    plot_text(frame, "BOSTEZO!!!", ALM_txt_pos, self.state_tracker["COLOR"])
+            else:
+                self.state_tracker["yawn_start_time"] = time.perf_counter()
+                self.state_tracker["YAWN_TIME"] = 0.0
+                self.state_tracker["play_alarm"] = False
+
             EAR_txt = f"EAR: {round(EAR, 2)}"
+            MAR_txt = f"MAR: {round(MAR, 2)}"
             DROWSY_TIME_txt = f"TIEMPO: {round(self.state_tracker['DROWSY_TIME'], 3)} Secs"
+            YAWN_TIME_txt = f"BOSTEZO: {round(self.state_tracker['YAWN_TIME'], 3)} Secs"
             plot_text(frame, EAR_txt, self.EAR_txt_pos, self.state_tracker["COLOR"])
+            plot_text(frame, MAR_txt, self.MAR_txt_pos, self.state_tracker["COLOR"])
             plot_text(frame, DROWSY_TIME_txt, DROWSY_TIME_txt_pos, self.state_tracker["COLOR"])
+            plot_text(frame, YAWN_TIME_txt, YAWN_TIME_txt_pos, self.state_tracker["COLOR"])
 
         else:
-            self.state_tracker["start_time"] = time.perf_counter()
+            self.state_tracker["drowsy_start_time"] = time.perf_counter()
+            self.state_tracker["yawn_start_time"] = time.perf_counter()
             self.state_tracker["DROWSY_TIME"] = 0.0
+            self.state_tracker["YAWN_TIME"] = 0.0
             self.state_tracker["COLOR"] = self.GREEN
             self.state_tracker["play_alarm"] = False
 
