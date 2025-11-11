@@ -1,3 +1,9 @@
+"""
+Streamlit application for driver drowsiness detection.
+
+This is the main entry point for the drowsiness detection web application.
+"""
+
 import os
 import av
 import threading
@@ -5,14 +11,16 @@ import streamlit as st
 import streamlit_nested_layout
 from streamlit_webrtc import VideoHTMLAttributes, webrtc_streamer
 
-from audio_handling import AudioFrameHandler
-from drowsy_detection import VideoFrameHandler
-# from ads import css_string
+from drowsiness_detector import VideoFrameHandler, AudioFrameHandler, DEFAULT_THRESHOLDS
 
 
 # Define the audio file to use.
 alarm_file_path = os.path.join("audio", "wake_up.wav")
-print(alarm_file_path)
+
+# Verify audio file exists
+if not os.path.exists(alarm_file_path):
+    st.error(f"Audio file not found: {alarm_file_path}")
+    st.stop()
 
 # Streamlit Components web page config
 st.set_page_config(
@@ -34,23 +42,57 @@ with col1:
         c1, c2 = st.columns(spec=[1, 1])
         with c1:
             # The amount of time (in seconds) to wait before sounding the alarm.
-            WAIT_TIME = st.slider("Segundos antes de que suene la alarma:", 0.0, 5.0, 1.0, 0.25)
+            WAIT_TIME = st.slider(
+                "Segundos antes de que suene la alarma:",
+                0.0, 5.0, DEFAULT_THRESHOLDS["WAIT_TIME"], 0.25
+            )
 
         with c2:
             # Lowest valid value of Eye Aspect Ratio. Ideal values [0.15, 0.2].
-            EAR_THRESH = st.slider("Separación de ojo:", 0.0, 0.4, 0.18, 0.01)
+            EAR_THRESH = st.slider(
+                "Separación de ojo:",
+                0.0, 0.4, DEFAULT_THRESHOLDS["EAR_THRESH"], 0.01
+            )
 
         with st.container():
             c3, c4 = st.columns(spec=[1, 1])
             with c3:
                 # Lowest valid value of Mouth Aspect Ratio. Ideal values [0.5, 0.7].
-                MAR_THRESH = st.slider("Separación de boca:", 0.0, 1.0, 0.6, 0.01)
+                MAR_THRESH = st.slider(
+                    "Separación de boca:",
+                    0.0, 1.0, DEFAULT_THRESHOLDS["MAR_THRESH"], 0.01
+                )
+
+        with st.container():
+            st.subheader("Configuración de Inclinación de Cabeza")
+            c5, c6, c7 = st.columns(spec=[1, 1, 1])
+            with c5:
+                # Roll threshold (tilt left/right) in degrees
+                ROLL_THRESH = st.slider(
+                    "Umbral de Roll (izq/der):",
+                    0.0, 45.0, DEFAULT_THRESHOLDS["ROLL_THRESH"], 1.0
+                )
+            with c6:
+                # Pitch threshold (nodding up/down) in degrees
+                PITCH_THRESH = st.slider(
+                    "Umbral de Pitch (arriba/abajo):",
+                    0.0, 45.0, DEFAULT_THRESHOLDS["PITCH_THRESH"], 1.0
+                )
+            with c7:
+                # Yaw threshold (turning left/right) in degrees
+                YAW_THRESH = st.slider(
+                    "Umbral de Yaw (girar izq/der):",
+                    0.0, 45.0, DEFAULT_THRESHOLDS["YAW_THRESH"], 1.0
+                )
 
 # Store the thresholds in a dictionary to pass to the callback function.
 thresholds = {
     "EAR_THRESH": EAR_THRESH,
     "MAR_THRESH": MAR_THRESH,
     "WAIT_TIME": WAIT_TIME,
+    "ROLL_THRESH": ROLL_THRESH,
+    "PITCH_THRESH": PITCH_THRESH,
+    "YAW_THRESH": YAW_THRESH,
 }
 
 # For streamlit-webrtc

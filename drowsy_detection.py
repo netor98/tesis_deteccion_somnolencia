@@ -113,6 +113,77 @@ def calculate_mar(landmarks, mouth_idxs, image_w, image_h):
     return mar, coords_points
 
 
+def calculate_head_pose(landmarks, head_pose_idxs, image_w, image_h):
+    """
+    Calculate head pose angles (roll, pitch, yaw) using facial landmarks.
+
+    Args:
+        landmarks: (list) Detected landmarks list
+        head_pose_idxs: (dict) Index positions of landmarks for head pose calculation
+        image_w: (int) Width of captured frame
+        image_h: (int) Height of captured frame
+
+    Returns:
+        angles: (dict) Dictionary containing roll, pitch, yaw angles in degrees
+        coords_points: (dict) Dictionary containing coordinate points used for calculation
+    """
+    try:
+        coords_points = {}
+        for key, idx in head_pose_idxs.items():
+            lm = landmarks[idx]
+            coord = denormalize_coordinates(lm.x, lm.y, image_w, image_h)
+            if coord is None:
+                return {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}, None
+            coords_points[key] = coord
+
+        # Calculate Roll (tilt left/right) using eye corners
+        left_eye = coords_points["left_eye"]
+        right_eye = coords_points["right_eye"]
+        roll = np.degrees(np.arctan2(right_eye[1] - left_eye[1], right_eye[0] - left_eye[0]))
+
+        # Calculate Yaw (turning left/right) using face width
+        face_left = coords_points["face_left"]
+        face_right = coords_points["face_right"]
+        nose_tip = coords_points["nose_tip"]
+
+        # Calculate distances from nose to left and right face edges
+        dist_left = distance(nose_tip, face_left)
+        dist_right = distance(nose_tip, face_right)
+        face_width = distance(face_left, face_right)
+
+        # Yaw is positive when turning right (more of right side visible)
+        # Negative when turning left (more of left side visible)
+        if face_width > 0:
+            yaw = np.degrees(np.arcsin((dist_right - dist_left) / face_width))
+        else:
+            yaw = 0.0
+
+        # Calculate Pitch (nodding up/down) using forehead and chin
+        forehead = coords_points["forehead"]
+        chin = coords_points["chin"]
+
+        # Calculate the angle between forehead-chin line and horizontal
+        vertical_dist = chin[1] - forehead[1]
+        horizontal_dist = abs(chin[0] - forehead[0])
+
+        if horizontal_dist > 0:
+            pitch = np.degrees(np.arctan2(vertical_dist, horizontal_dist)) - 90
+        else:
+            pitch = 0.0
+
+        angles = {
+            "roll": round(roll, 2),
+            "pitch": round(pitch, 2),
+            "yaw": round(yaw, 2)
+        }
+
+    except Exception as e:
+        angles = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+        coords_points = None
+
+    return angles, coords_points
+
+
 def plot_eye_landmarks(frame, left_lm_coordinates, right_lm_coordinates, color):
     if not frame.flags.writeable:
         frame = frame.copy()
@@ -163,6 +234,17 @@ class VideoFrameHandler:
     "H": 312,  # lower right lip
 }
 
+        # Head pose landmarks for calculating head tilt
+        self.head_pose_idxs = {
+            "left_eye": 33,      # Left eye outer corner
+            "right_eye": 263,    # Right eye outer corner
+            "nose_tip": 4,       # Nose tip
+            "forehead": 10,      # Forehead center
+            "chin": 152,         # Chin center
+            "face_left": 234,    # Left face edge
+            "face_right": 454,   # Right face edge
+        }
+
         # Used for coloring landmark points.
         # Its value depends on the current EAR value.
         self.RED = (0, 0, 255)  # BGR
@@ -175,14 +257,17 @@ class VideoFrameHandler:
         self.state_tracker = {
             "drowsy_start_time": time.perf_counter(),
             "yawn_start_time": time.perf_counter(),
+            "head_tilt_start_time": time.perf_counter(),
             "DROWSY_TIME": 0.0,  # Holds the amount of time passed with EAR < EAR_THRESH
             "YAWN_TIME": 0.0,  # Holds the amount of time passed with MAR > MAR_THRESH
+            "HEAD_TILT_TIME": 0.0,  # Holds the amount of time passed with head tilt beyond threshold
             "COLOR": self.GREEN,
             "play_alarm": False,
         }
 
         self.EAR_txt_pos = (10, 30)
         self.MAR_txt_pos = (10, 60)
+        self.HEAD_POSE_txt_pos = (10, 90)
 
     def process(self, frame: np.array, thresholds: dict):
         """
@@ -205,6 +290,7 @@ class VideoFrameHandler:
 
         DROWSY_TIME_txt_pos = (10, int(frame_h // 2 * 1.7))
         YAWN_TIME_txt_pos = (10, int(frame_h // 2 * 1.6))
+        HEAD_TILT_TIME_txt_pos = (10, int(frame_h // 2 * 1.5))
         ALM_txt_pos = (10, int(frame_h // 2 * 1.85))
 
         results = self.facemesh_model.process(frame)
@@ -214,6 +300,7 @@ class VideoFrameHandler:
             EAR, coordinates = calculate_avg_ear(landmarks, self.eye_idxs["left"], self.eye_idxs["right"], frame_w,
                                                  frame_h)
             MAR, mouth_coordinates = calculate_mar(landmarks, self.mouth_idxs, frame_w, frame_h)
+            head_pose_angles, head_pose_coords = calculate_head_pose(landmarks, self.head_pose_idxs, frame_w, frame_h)
             frame = plot_eye_landmarks(frame, coordinates[0], coordinates[1], self.state_tracker["COLOR"])
             frame = plot_mouth_landmarks(frame, mouth_coordinates, self.state_tracker["COLOR"])
 
@@ -253,20 +340,56 @@ class VideoFrameHandler:
                 self.state_tracker["YAWN_TIME"] = 0.0
                 self.state_tracker["play_alarm"] = False
 
+            # Head tilt detection
+            if head_pose_angles:
+                roll_abs = abs(head_pose_angles["roll"])
+                pitch_abs = abs(head_pose_angles["pitch"])
+                yaw_abs = abs(head_pose_angles["yaw"])
+
+                # Check if head tilt exceeds threshold (default: 20 degrees for roll, 15 for pitch/yaw)
+                roll_thresh = thresholds.get("ROLL_THRESH", 20.0)
+                pitch_thresh = thresholds.get("PITCH_THRESH", 15.0)
+                yaw_thresh = thresholds.get("YAW_THRESH", 15.0)
+
+                if roll_abs > roll_thresh or pitch_abs > pitch_thresh or yaw_abs > yaw_thresh:
+                    end_time = time.perf_counter()
+                    self.state_tracker["HEAD_TILT_TIME"] += end_time - self.state_tracker["head_tilt_start_time"]
+                    self.state_tracker["head_tilt_start_time"] = end_time
+                    self.state_tracker["COLOR"] = self.RED
+
+                    if self.state_tracker["HEAD_TILT_TIME"] >= thresholds.get("WAIT_TIME", 2.0):
+                        self.state_tracker["play_alarm"] = True
+                        plot_text(frame, "CABEZA INCLINADA!!!", ALM_txt_pos, self.state_tracker["COLOR"])
+                else:
+                    self.state_tracker["head_tilt_start_time"] = time.perf_counter()
+                    self.state_tracker["HEAD_TILT_TIME"] = 0.0
+                    if not (EAR < thresholds["EAR_THRESH"] or MAR > thresholds["MAR_THRESH"]):
+                        self.state_tracker["COLOR"] = self.GREEN
+                        self.state_tracker["play_alarm"] = False
+
             EAR_txt = f"EAR: {round(EAR, 2)}"
             MAR_txt = f"MAR: {round(MAR, 2)}"
+            if head_pose_angles:
+                HEAD_POSE_txt = f"Roll: {head_pose_angles['roll']}° | Pitch: {head_pose_angles['pitch']}° | Yaw: {head_pose_angles['yaw']}°"
+            else:
+                HEAD_POSE_txt = "Head Pose: N/A"
             DROWSY_TIME_txt = f"TIEMPO: {round(self.state_tracker['DROWSY_TIME'], 3)} Secs"
             YAWN_TIME_txt = f"BOSTEZO: {round(self.state_tracker['YAWN_TIME'], 3)} Secs"
+            HEAD_TILT_TIME_txt = f"INCLINACION: {round(self.state_tracker['HEAD_TILT_TIME'], 3)} Secs"
             plot_text(frame, EAR_txt, self.EAR_txt_pos, self.state_tracker["COLOR"])
             plot_text(frame, MAR_txt, self.MAR_txt_pos, self.state_tracker["COLOR"])
+            plot_text(frame, HEAD_POSE_txt, self.HEAD_POSE_txt_pos, self.state_tracker["COLOR"])
             plot_text(frame, DROWSY_TIME_txt, DROWSY_TIME_txt_pos, self.state_tracker["COLOR"])
             plot_text(frame, YAWN_TIME_txt, YAWN_TIME_txt_pos, self.state_tracker["COLOR"])
+            plot_text(frame, HEAD_TILT_TIME_txt, HEAD_TILT_TIME_txt_pos, self.state_tracker["COLOR"])
 
         else:
             self.state_tracker["drowsy_start_time"] = time.perf_counter()
             self.state_tracker["yawn_start_time"] = time.perf_counter()
+            self.state_tracker["head_tilt_start_time"] = time.perf_counter()
             self.state_tracker["DROWSY_TIME"] = 0.0
             self.state_tracker["YAWN_TIME"] = 0.0
+            self.state_tracker["HEAD_TILT_TIME"] = 0.0
             self.state_tracker["COLOR"] = self.GREEN
             self.state_tracker["play_alarm"] = False
 
