@@ -8,10 +8,9 @@ import os
 import av
 import threading
 import streamlit as st
-import streamlit_nested_layout
 from streamlit_webrtc import VideoHTMLAttributes, webrtc_streamer
 
-from drowsiness_detector import VideoFrameHandler, AudioFrameHandler, DEFAULT_THRESHOLDS
+from drowsiness_detector import VideoFrameHandler, AudioFrameHandler, DEFAULT_THRESHOLDS, get_api_client
 
 
 # Define the audio file to use.
@@ -24,7 +23,7 @@ if not os.path.exists(alarm_file_path):
 
 # Streamlit Components web page config
 st.set_page_config(
-    page_title="",
+    page_title="Detección de Somnolencia",
     page_icon="",
     layout="wide",  # centered, wide
     initial_sidebar_state="expanded",
@@ -32,71 +31,64 @@ st.set_page_config(
     },
 )
 
+# API Configuration
+API_BASE_URL = os.getenv("RISK_ADVISOR_API_URL", "http://localhost:8000")
+api_client = get_api_client()
+if hasattr(api_client, 'base_url'):
+    api_client.base_url = API_BASE_URL
 
-col1, col2 = st.columns(spec=[6, 2], gap="medium")
+# Sidebar for configuration
+with st.sidebar:
+    st.header("Configuración")
 
-# Sidebar
-with col1:
-    st.title("")
-    with st.container():
-        c1, c2 = st.columns(spec=[1, 1])
-        with c1:
-            # The amount of time (in seconds) to wait before sounding the alarm.
-            WAIT_TIME = st.slider(
-                "Segundos antes de que suene la alarma:",
-                0.0, 5.0, DEFAULT_THRESHOLDS["WAIT_TIME"], 0.25
-            )
+    # Driver selection
+    st.subheader("Seleccionar Conductor")
+    conductor_id = st.number_input(
+        "ID del Conductor",
+        min_value=1,
+        value=st.session_state.get("conductor_id", 1),
+        step=1,
+        help="Ingrese el ID del conductor para el viaje"
+    )
 
-        with c2:
-            # Lowest valid value of Eye Aspect Ratio. Ideal values [0.15, 0.2].
-            EAR_THRESH = st.slider(
-                "Separación de ojo:",
-                0.0, 0.4, DEFAULT_THRESHOLDS["EAR_THRESH"], 0.01
-            )
+    # Get active trip
+    viaje_id = None
+    if st.button("Conectar a Viaje Activo"):
+        try:
+            active_trip = api_client.get_active_trip_by_driver(conductor_id)
+            if active_trip:
+                viaje_id = active_trip.get("id_viaje")
+                st.session_state["viaje_id"] = viaje_id
+                st.session_state["conductor_id"] = conductor_id
+                st.success(f"✅ Conectado al viaje #{viaje_id}")
+            else:
+                st.warning("⚠️ No hay un viaje activo para este conductor. El administrador debe iniciar un viaje primero.")
+                st.session_state["viaje_id"] = None
+        except Exception as e:
+            st.error(f"❌ Error al conectar: {str(e)}")
+            st.session_state["viaje_id"] = None
 
-        with st.container():
-            c3, c4 = st.columns(spec=[1, 1])
-            with c3:
-                # Lowest valid value of Mouth Aspect Ratio. Ideal values [0.5, 0.7].
-                MAR_THRESH = st.slider(
-                    "Separación de boca:",
-                    0.0, 1.0, DEFAULT_THRESHOLDS["MAR_THRESH"], 0.01
-                )
+    # Show current connection status
+    if st.session_state.get("viaje_id"):
+        st.info(f"🔗 Conectado al viaje #{st.session_state['viaje_id']}")
+        if st.button("Desconectar"):
+            st.session_state["viaje_id"] = None
+            st.rerun()
+    else:
+        st.warning("⚠️ No conectado a ningún viaje")
 
-        with st.container():
-            st.subheader("Configuración de Inclinación de Cabeza")
-            c5, c6, c7 = st.columns(spec=[1, 1, 1])
-            with c5:
-                # Roll threshold (tilt left/right) in degrees
-                ROLL_THRESH = st.slider(
-                    "Umbral de Roll (izq/der):",
-                    0.0, 45.0, DEFAULT_THRESHOLDS["ROLL_THRESH"], 1.0
-                )
-            with c6:
-                # Pitch threshold (nodding up/down) in degrees
-                PITCH_THRESH = st.slider(
-                    "Umbral de Pitch (arriba/abajo):",
-                    0.0, 45.0, DEFAULT_THRESHOLDS["PITCH_THRESH"], 1.0
-                )
-            with c7:
-                # Yaw threshold (turning left/right) in degrees
-                YAW_THRESH = st.slider(
-                    "Umbral de Yaw (girar izq/der):",
-                    0.0, 45.0, DEFAULT_THRESHOLDS["YAW_THRESH"], 1.0
-                )
+# Use default thresholds from config
+thresholds = DEFAULT_THRESHOLDS.copy()
 
-# Store the thresholds in a dictionary to pass to the callback function.
-thresholds = {
-    "EAR_THRESH": EAR_THRESH,
-    "MAR_THRESH": MAR_THRESH,
-    "WAIT_TIME": WAIT_TIME,
-    "ROLL_THRESH": ROLL_THRESH,
-    "PITCH_THRESH": PITCH_THRESH,
-    "YAW_THRESH": YAW_THRESH,
-}
+# Get viaje_id from session state
+viaje_id = st.session_state.get("viaje_id")
 
-# For streamlit-webrtc
-video_handler = VideoFrameHandler() # Initialize the video frame handler (drowsiness detection)
+# Initialize handlers (video_handler will be recreated if viaje_id changes)
+if "video_handler" not in st.session_state or st.session_state.get("last_viaje_id") != viaje_id:
+    st.session_state["video_handler"] = VideoFrameHandler(viaje_id=viaje_id)
+    st.session_state["last_viaje_id"] = viaje_id
+
+video_handler = st.session_state["video_handler"]
 audio_handler = AudioFrameHandler(sound_file_path=alarm_file_path)
 
 lock = threading.Lock()  # For thread-safe access & to prevent race-condition.
@@ -123,13 +115,12 @@ def audio_frame_callback(frame: av.AudioFrame):
     return new_frame
 
 # WebRTC streamer component (protocol that handles video and audio streaming)
-with col1:
-    ctx = webrtc_streamer(
-        key="drowsiness-detection",
-        video_frame_callback=video_frame_callback,
-        audio_frame_callback=audio_frame_callback,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},  # Add this to config for cloud deployment.
-        media_stream_constraints={"video": {"height": {"ideal": 480}}, "audio": True},
-        video_html_attrs=VideoHTMLAttributes(autoPlay=True, controls=False, muted=False),
-    )
+ctx = webrtc_streamer(
+    key="drowsiness-detection",
+    video_frame_callback=video_frame_callback,
+    audio_frame_callback=audio_frame_callback,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},  # Add this to config for cloud deployment.
+    media_stream_constraints={"video": {"height": {"ideal": 480}}, "audio": True},
+    video_html_attrs=VideoHTMLAttributes(autoPlay=True, controls=False, muted=False),
+)
 

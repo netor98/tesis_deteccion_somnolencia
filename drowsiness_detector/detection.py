@@ -277,8 +277,12 @@ class StateTracker:
 class VideoFrameHandler:
     """Main handler for processing video frames and detecting drowsiness."""
 
-    def __init__(self):
-        """Initialize the video frame handler with MediaPipe and state tracking."""
+    def __init__(self, viaje_id: int = None):
+        """Initialize the video frame handler with MediaPipe and state tracking.
+
+        Args:
+            viaje_id: ID of the active trip to send detections to backend
+        """
         self.eye_idxs = LANDMARK_INDICES["eye"]
         self.mouth_idxs = LANDMARK_INDICES["mouth"]
         self.head_pose_idxs = LANDMARK_INDICES["head_pose"]
@@ -287,6 +291,10 @@ class VideoFrameHandler:
         self.state_tracker = StateTracker()
 
         self.text_positions = TEXT_POSITIONS.copy()
+        self.viaje_id = viaje_id
+        self.last_reading_time = 0.0
+        self.reading_interval = 2.0  # Send reading every 2 seconds
+        self.last_alarm_state = False
 
     def process(self, frame: np.ndarray, thresholds: dict):
         """Process a video frame and detect drowsiness indicators.
@@ -298,8 +306,12 @@ class VideoFrameHandler:
         Returns:
             tuple: (processed_frame, play_alarm_boolean)
         """
+        import time
+        from .api_client import send_reading_async, send_alert_async
+
         frame.flags.writeable = False
         frame_h, frame_w, _ = frame.shape
+        current_time = time.perf_counter()
 
         # Calculate text positions based on frame size
         drowsy_time_pos = (10, int(frame_h // 2 * 1.7))
@@ -372,6 +384,34 @@ class VideoFrameHandler:
             # Display metrics
             self._display_metrics(frame, ear, mar, head_pose_angles,
                                 drowsy_time_pos, yawn_time_pos, head_tilt_time_pos)
+
+            # Send periodic readings to backend
+            if self.viaje_id and (current_time - self.last_reading_time) >= self.reading_interval:
+                reading_data = {
+                    "id_viaje": self.viaje_id,
+                    "percios": ear,  # Using EAR as percios value
+                    "conteo_cabeceos": 1 if ear < thresholds.get("EAR_THRESH", 0.18) else 0,
+                    "conteo_bostezos": 1 if mar > thresholds.get("MAR_THRESH", 0.6) else 0,
+                }
+                send_reading_async(reading_data)
+                self.last_reading_time = current_time
+
+            # Send alert when alarm state changes from False to True
+            if self.viaje_id and self.state_tracker.play_alarm and not self.last_alarm_state:
+                alert_type = "DROWSINESS"
+                if mar > thresholds.get("MAR_THRESH", 0.6):
+                    alert_type = "YAWNING"
+                elif tilt_detected:
+                    alert_type = "HEAD_TILT"
+
+                alert_data = {
+                    "id_viaje": self.viaje_id,
+                    "tipo_alerta": alert_type,
+                    "nivel_somnolencia": "ALTA" if self.state_tracker.play_alarm else "MEDIA",
+                }
+                send_alert_async(alert_data)
+
+            self.last_alarm_state = self.state_tracker.play_alarm
         else:
             self.state_tracker.reset_all()
             frame = cv2.flip(frame, 1)
