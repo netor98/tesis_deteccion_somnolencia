@@ -49,7 +49,14 @@ class APIClient:
             )
             response.raise_for_status()
             return response.json() if response.content else None
+        except requests.exceptions.ConnectionError:
+            # Connection errors are handled silently - connection status is checked separately
+            return None
+        except requests.exceptions.Timeout:
+            # Timeout errors are handled silently
+            return None
         except requests.exceptions.RequestException as e:
+            # Only log non-connection errors
             print(f"API request failed: {e}")
             return None
 
@@ -66,12 +73,60 @@ class APIClient:
         try:
             response = self.session.get(url, timeout=REQUEST_TIMEOUT)
             if response.status_code == 404:
-                return None  # No active trip
+                return None  # No active trip or conductor not found
             response.raise_for_status()
             return response.json() if response.content else None
-        except requests.exceptions.RequestException as e:
-            print(f"API request failed: {e}")
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            # Connection errors are handled silently - connection status is checked separately
             return None
+        except requests.exceptions.RequestException:
+            # Other request errors are handled silently
+            return None
+
+    def get_all_active_trips(self) -> list:
+        """Get all active trips in the system.
+
+        Returns:
+            List of active trip data or empty list if none found
+        """
+        url = f"{self.base_url}/viajes/activos"
+        try:
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response.json() if response.content else []
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException):
+            # Connection errors are handled silently
+            return []
+
+    def get_drivers(self) -> list:
+        """Get all drivers from the system.
+
+        Returns:
+            List of driver data or empty list if none found
+        """
+        url = f"{self.base_url}/conductores/"
+        try:
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response.json() if response.content else []
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException):
+            # Connection errors are handled silently
+            return []
+
+    def check_connection(self) -> bool:
+        """Check if the API is accessible.
+
+        Returns:
+            True if API is accessible, False otherwise
+        """
+        url = f"{self.base_url}/health"
+        try:
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            return response.status_code == 200
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException):
+            # Connection errors are expected when server is not running
+            # Don't print errors here - let the UI handle the messaging
+            return False
 
     def create_reading(self, reading_data: Dict[str, Any]) -> Optional[Dict]:
         """Create a sensor reading.
