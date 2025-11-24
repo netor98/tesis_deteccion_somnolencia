@@ -6,6 +6,8 @@ This is the main entry point for the drowsiness detection web application.
 
 import os
 import av
+import cv2
+import time
 import threading
 import streamlit as st
 from streamlit_webrtc import VideoHTMLAttributes, webrtc_streamer
@@ -51,6 +53,31 @@ with st.sidebar:
 
     # Camera Configuration (for Raspberry Pi)
     st.subheader("Configuración de Cámara")
+
+    # Camera mode selection
+    camera_mode = st.radio(
+        "Modo de cámara",
+        ["OpenCV (Recomendado para SSH)", "WebRTC (Navegador)"],
+        help="OpenCV accede directamente a la cámara del servidor. WebRTC usa la cámara del navegador.",
+        index=0,  # Default to OpenCV
+        key="camera_mode_radio"
+    )
+
+    # Save camera mode to session state
+    st.session_state["camera_mode"] = camera_mode
+
+    # Camera device selection for OpenCV
+    if camera_mode == "OpenCV (Recomendado para SSH)":
+        camera_index = st.number_input(
+            "Índice de cámara",
+            min_value=0,
+            max_value=10,
+            value=st.session_state.get("camera_index", 0),
+            help="Índice de la cámara (0 para /dev/video0, 1 para /dev/video1, etc.)",
+            key="camera_index_input"
+        )
+        st.session_state["camera_index"] = camera_index
+
     camera_info = st.info("💡 Si tienes problemas con la cámara, verifica los permisos y la conexión")
 
     # Check if running on Raspberry Pi
@@ -289,8 +316,6 @@ def audio_frame_callback(frame: av.AudioFrame):
         print(f"Error in audio_frame_callback: {e}")
         return frame
 
-# WebRTC streamer component (protocol that handles video and audio streaming)
-# Note: This requires browser access to camera, not server-side camera access
 st.header("📹 Detección de Somnolencia")
 
 # Check if we have a trip connection
@@ -300,104 +325,203 @@ if not st.session_state.get("viaje_id"):
 else:
     st.info(f"✅ Conectado al viaje #{st.session_state.get('viaje_id')} - La detección está activa")
 
-    # Instructions for camera access
-    with st.expander("ℹ️ Instrucciones para acceder a la cámara"):
-        st.markdown("""
-        **Para usar la cámara en tu navegador:**
+    # Get camera mode from session state (set in sidebar)
+    camera_mode = st.session_state.get("camera_mode", "OpenCV (Recomendado para SSH)")
+    camera_index = st.session_state.get("camera_index", 0)
 
-        1. **Permisos del navegador**: Cuando se cargue el video, el navegador te pedirá permiso para acceder a la cámara. Debes aceptar.
+    if camera_mode == "OpenCV (Recomendado para SSH)":
+        # OpenCV mode - Direct camera access from server
+        st.subheader("Modo OpenCV - Acceso directo a la cámara del servidor")
 
-        2. **En Raspberry Pi**:
-           - Si accedes desde otra máquina: El navegador usará la cámara de esa máquina
-           - Si accedes localmente: El navegador usará la cámara de la Raspberry Pi (si está disponible)
+        # Initialize camera capture in session state
+        if "camera_capture" not in st.session_state:
+            st.session_state["camera_capture"] = None
+            st.session_state["detection_running"] = False
 
-        3. **Verificar cámara disponible**:
-           ```bash
-           # En Raspberry Pi, verifica dispositivos de video:
-           v4l2-ctl --list-devices
-           ls -l /dev/video*
-           ```
+        # Control buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("▶️ Iniciar Detección", disabled=st.session_state.get("detection_running", False)):
+                try:
+                    # Try to open camera
+                    cap = cv2.VideoCapture(camera_index)
+                    if not cap.isOpened():
+                        st.error(f"❌ No se pudo abrir la cámara {camera_index}")
+                        st.info("💡 Verifica que la cámara esté conectada y que tengas permisos")
+                    else:
+                        st.session_state["camera_capture"] = cap
+                        st.session_state["detection_running"] = True
+                        st.success("✅ Cámara iniciada correctamente")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al abrir la cámara: {e}")
 
-        4. **Si el error persiste**:
-           - Verifica que la cámara esté conectada y funcionando
-           - Prueba con otro navegador (Chrome, Firefox)
-           - Verifica que la URL sea `http://` o `https://` (no `file://`)
-           - Asegúrate de que el navegador tenga permisos de cámara
-        """)
+        with col2:
+            if st.button("⏹️ Detener Detección", disabled=not st.session_state.get("detection_running", False)):
+                if st.session_state.get("camera_capture") is not None:
+                    st.session_state["camera_capture"].release()
+                    st.session_state["camera_capture"] = None
+                st.session_state["detection_running"] = False
+                st.info("⏸️ Detección detenida")
+                st.rerun()
 
-    # WebRTC streamer
-    # Note: webrtc_streamer is non-blocking, it renders the component immediately
-    st.info("💡 **Instrucciones**: Haz clic en el botón 'Start' debajo para iniciar la detección")
-    st.info("⚠️ **Importante**: Acepta el permiso de cámara cuando el navegador lo solicite")
+        # Video display and processing
+        if st.session_state.get("detection_running", False) and st.session_state.get("camera_capture") is not None:
+            cap = st.session_state["camera_capture"]
 
-    try:
-        ctx = webrtc_streamer(
-            key="drowsiness-detection",
-            video_frame_callback=video_frame_callback,
-            audio_frame_callback=audio_frame_callback,
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            media_stream_constraints={
-                "video": {
-                    "height": {"ideal": 480},
-                    "width": {"ideal": 640},
-                    "facingMode": "user"  # Front-facing camera
-                },
-                "audio": True
-            },
-            video_html_attrs=VideoHTMLAttributes(
-                autoPlay=True,
-                controls=False,
-                muted=False,
-                style={"width": "100%"}
-            ),
-        )
+            # Create placeholder for video
+            video_placeholder = st.empty()
 
-        # Check state after initialization (with delay to allow component to initialize)
-        if ctx:
-            if hasattr(ctx, 'state'):
-                if ctx.state.playing:
-                    st.success("✅ Cámara activa - Detección en curso")
-                elif ctx.state.playing is False:
-                    st.info("⏸️ Cámara pausada - Haz clic en 'Start' para iniciar")
+            # Process single frame (Streamlit will rerun automatically)
+            try:
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    st.error("❌ No se pudo leer el frame de la cámara")
+                    # Stop detection if camera fails
+                    cap.release()
+                    st.session_state["camera_capture"] = None
+                    st.session_state["detection_running"] = False
                 else:
-                    st.warning("⚠️ Esperando acceso a la cámara...")
-                    st.info("💡 Acepta el permiso de cámara cuando el navegador lo solicite")
-            else:
-                st.info("💡 Haz clic en 'Start' para iniciar la detección")
+                    # Process frame
+                    try:
+                        processed_frame, play_alarm = video_handler.process(frame, thresholds)
+
+                        # Update shared state for audio
+                        with lock:
+                            shared_state["play_alarm"] = play_alarm
+
+                        # Convert BGR to RGB for display
+                        display_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+
+                        # Display frame
+                        video_placeholder.image(display_frame, channels="RGB", use_container_width=True)
+
+                        # Play alarm if needed (simple beep for now)
+                        if play_alarm:
+                            # Audio will be handled separately if needed
+                            pass
+
+                    except Exception as e:
+                        import traceback
+                        st.error(f"Error procesando frame: {e}")
+                        print(traceback.format_exc())
+                        # Show original frame on error
+                        display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        video_placeholder.image(display_frame, channels="RGB", use_container_width=True)
+
+                    # Rerun to get next frame (creates video loop effect)
+                    time.sleep(0.03)  # Small delay to prevent overwhelming
+                    st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Error en el loop de detección: {e}")
+                import traceback
+                print(traceback.format_exc())
+                # Cleanup on error
+                if st.session_state.get("camera_capture") is not None:
+                    st.session_state["camera_capture"].release()
+                    st.session_state["camera_capture"] = None
+                st.session_state["detection_running"] = False
         else:
-            st.warning("⚠️ Componente de video no inicializado")
+            st.info("💡 Haz clic en 'Iniciar Detección' para comenzar")
 
-    except Exception as e:
-        error_msg = str(e)
-        st.error(f"❌ Error al acceder a la cámara: {error_msg}")
+    else:
+        # WebRTC mode - Browser camera access
+        st.subheader("Modo WebRTC - Cámara del navegador")
 
-        if "NotFoundError" in error_msg or "device not found" in error_msg.lower():
-            st.error("**Problema**: No se encontró ningún dispositivo de cámara")
+        with st.expander("ℹ️ Instrucciones para acceder a la cámara"):
             st.markdown("""
-            **Soluciones:**
+            **Para usar la cámara en tu navegador:**
 
-            1. **Verifica que la cámara esté conectada**:
-               - En Raspberry Pi: `lsusb` o `v4l2-ctl --list-devices`
-               - Verifica que aparezca `/dev/video0` o similar
+            1. **Permisos del navegador**: Cuando se cargue el video, el navegador te pedirá permiso para acceder a la cámara. Debes aceptar.
 
-            2. **Permisos del navegador**:
-               - Asegúrate de que el navegador tenga permisos para acceder a la cámara
-               - Verifica la configuración de privacidad del navegador
+            2. **En Raspberry Pi**:
+               - Si accedes desde otra máquina: El navegador usará la cámara de esa máquina
+               - Si accedes localmente: El navegador usará la cámara de la Raspberry Pi (si está disponible)
 
-            3. **Acceso HTTPS/HTTP**:
-               - Algunos navegadores requieren HTTPS para acceder a la cámara
-               - Prueba accediendo con `https://` si es posible
-               - O usa `http://localhost` en lugar de la IP
-
-            4. **Reinicia la aplicación**:
+            3. **Verificar cámara disponible**:
                ```bash
-               # Detén Streamlit (Ctrl+C) y reinicia:
-               streamlit run streamlit_app.py
+               # En Raspberry Pi, verifica dispositivos de video:
+               v4l2-ctl --list-devices
+               ls -l /dev/video*
                ```
-            """)
-        else:
-            st.error(f"Error desconocido: {error_msg}")
-            st.info("💡 Intenta recargar la página o reiniciar la aplicación")
 
-        ctx = None
+            4. **Si el error persiste**:
+               - Verifica que la cámara esté conectada y funcionando
+               - Prueba con otro navegador (Chrome, Firefox)
+               - Verifica que la URL sea `http://` o `https://` (no `file://`)
+               - Asegúrate de que el navegador tenga permisos de cámara
+            """)
+
+        st.info("💡 **Instrucciones**: Haz clic en el botón 'Start' debajo para iniciar la detección")
+        st.info("⚠️ **Importante**: Acepta el permiso de cámara cuando el navegador lo solicite")
+
+        try:
+            ctx = webrtc_streamer(
+                key="drowsiness-detection",
+                video_frame_callback=video_frame_callback,
+                audio_frame_callback=audio_frame_callback,
+                rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+                media_stream_constraints={
+                    "video": {
+                        "height": {"ideal": 480},
+                        "width": {"ideal": 640},
+                        "facingMode": "user"  # Front-facing camera
+                    },
+                    "audio": True
+                },
+                video_html_attrs=VideoHTMLAttributes(
+                    autoPlay=True,
+                    controls=False,
+                    muted=False,
+                    style={"width": "100%"}
+                ),
+            )
+
+            # Check state after initialization
+            if ctx:
+                if hasattr(ctx, 'state'):
+                    if ctx.state.playing:
+                        st.success("✅ Cámara activa - Detección en curso")
+                    elif ctx.state.playing is False:
+                        st.info("⏸️ Cámara pausada - Haz clic en 'Start' para iniciar")
+                    else:
+                        st.warning("⚠️ Esperando acceso a la cámara...")
+                        st.info("💡 Acepta el permiso de cámara cuando el navegador lo solicite")
+                else:
+                    st.info("💡 Haz clic en 'Start' para iniciar la detección")
+            else:
+                st.warning("⚠️ Componente de video no inicializado")
+
+        except Exception as e:
+            error_msg = str(e)
+            st.error(f"❌ Error al acceder a la cámara: {error_msg}")
+
+            if "NotFoundError" in error_msg or "device not found" in error_msg.lower():
+                st.error("**Problema**: No se encontró ningún dispositivo de cámara")
+                st.markdown("""
+                **Soluciones:**
+
+                1. **Verifica que la cámara esté conectada**:
+                   - En Raspberry Pi: `lsusb` o `v4l2-ctl --list-devices`
+                   - Verifica que aparezca `/dev/video0` o similar
+
+                2. **Permisos del navegador**:
+                   - Asegúrate de que el navegador tenga permisos para acceder a la cámara
+                   - Verifica la configuración de privacidad del navegador
+
+                3. **Acceso HTTPS/HTTP**:
+                   - Algunos navegadores requieren HTTPS para acceder a la cámara
+                   - Prueba accediendo con `https://` si es posible
+                   - O usa `http://localhost` en lugar de la IP
+
+                4. **Reinicia la aplicación**:
+                   ```bash
+                   # Detén Streamlit (Ctrl+C) y reinicia:
+                   streamlit run streamlit_app.py
+                   ```
+                """)
+            else:
+                st.error(f"Error desconocido: {error_msg}")
+                st.info("💡 Intenta recargar la página o reiniciar la aplicación")
 
