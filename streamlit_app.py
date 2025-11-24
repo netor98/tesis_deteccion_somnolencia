@@ -78,6 +78,15 @@ with st.sidebar:
         )
         st.session_state["camera_index"] = camera_index
 
+        # Auto-refresh toggle (allows user to disable auto-refresh for scrolling)
+        auto_refresh = st.checkbox(
+            "Auto-refresh (actualización automática)",
+            value=st.session_state.get("auto_refresh", True),
+            help="Desactiva esto si quieres poder hacer scroll en la página. Usa el botón 'Actualizar Frame' para actualizar manualmente.",
+            key="auto_refresh_checkbox"
+        )
+        st.session_state["auto_refresh"] = auto_refresh
+
     camera_info = st.info("💡 Si tienes problemas con la cámara, verifica los permisos y la conexión")
 
     # Check if running on Raspberry Pi
@@ -123,7 +132,7 @@ with st.sidebar:
         st.info("• La URL sea correcta (ej: http://IP:8000)")
         st.info("• No haya firewall bloqueando la conexión")
 
-        if st.button("🔄 Reintentar Conexión", use_container_width=True):
+        if st.button("🔄 Reintentar Conexión", use_container_width=False):
             st.session_state["api_connected"] = None
             st.rerun()
 
@@ -180,7 +189,7 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔍 Buscar Viaje Activo", use_container_width=True):
+        if st.button("🔍 Buscar Viaje Activo", use_container_width=False):
             if api_connected:
                 try:
                     with st.spinner("Buscando viaje activo..."):
@@ -205,7 +214,7 @@ with st.sidebar:
                 st.info("💡 Configura la URL del backend y verifica la conexión antes de buscar viajes.")
 
     with col2:
-        if st.button("📋 Ver Todos los Activos", use_container_width=True):
+        if st.button("📋 Ver Todos los Activos", use_container_width=False):
             if api_connected:
                 try:
                     active_trips = api_client.get_all_active_trips()
@@ -227,7 +236,7 @@ with st.sidebar:
     if st.session_state.get("viaje_id"):
         st.success(f"🔗 Conectado al viaje #{st.session_state['viaje_id']}")
         st.info(f"👤 Conductor ID: {st.session_state.get('conductor_id', 'N/A')}")
-        if st.button("🔌 Desconectar", use_container_width=True):
+        if st.button("🔌 Desconectar", use_container_width=False):
             st.session_state["viaje_id"] = None
             st.session_state["last_viaje_id"] = None
             st.session_state["auto_detect_attempted"] = False
@@ -339,7 +348,7 @@ else:
             st.session_state["detection_running"] = False
 
         # Control buttons
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             if st.button("▶️ Iniciar Detección", disabled=st.session_state.get("detection_running", False)):
                 try:
@@ -351,6 +360,7 @@ else:
                     else:
                         st.session_state["camera_capture"] = cap
                         st.session_state["detection_running"] = True
+                        st.session_state["frame_count"] = 0
                         st.success("✅ Cámara iniciada correctamente")
                         st.rerun()
                 except Exception as e:
@@ -362,7 +372,13 @@ else:
                     st.session_state["camera_capture"].release()
                     st.session_state["camera_capture"] = None
                 st.session_state["detection_running"] = False
+                st.session_state["frame_count"] = 0
                 st.info("⏸️ Detección detenida")
+                st.rerun()
+
+        with col3:
+            # Manual refresh button (allows user to control updates)
+            if st.button("🔄 Actualizar Frame", disabled=not st.session_state.get("detection_running", False)):
                 st.rerun()
 
         # Video display and processing
@@ -372,11 +388,14 @@ else:
             # Create placeholder for video
             video_placeholder = st.empty()
 
-            # Process single frame (Streamlit will rerun automatically)
+            # Status indicator
+            status_placeholder = st.empty()
+
+            # Process single frame per execution (allows user interaction)
             try:
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    st.error("❌ No se pudo leer el frame de la cámara")
+                    status_placeholder.error("❌ No se pudo leer el frame de la cámara")
                     # Stop detection if camera fails
                     cap.release()
                     st.session_state["camera_capture"] = None
@@ -394,7 +413,15 @@ else:
                         display_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
 
                         # Display frame
-                        video_placeholder.image(display_frame, channels="RGB", use_container_width=True)
+                        video_placeholder.image(display_frame, channels="RGB", width=None)
+
+                        # Update status (only show occasionally to reduce updates)
+                        if "frame_count" not in st.session_state:
+                            st.session_state["frame_count"] = 0
+                        st.session_state["frame_count"] += 1
+
+                        if st.session_state["frame_count"] % 30 == 0:  # Update status every 30 frames
+                            status_placeholder.info(f"✅ Detección activa - Frame {st.session_state['frame_count']}")
 
                         # Play alarm if needed (simple beep for now)
                         if play_alarm:
@@ -403,18 +430,28 @@ else:
 
                     except Exception as e:
                         import traceback
-                        st.error(f"Error procesando frame: {e}")
+                        status_placeholder.error(f"Error procesando frame: {e}")
                         print(traceback.format_exc())
                         # Show original frame on error
                         display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        video_placeholder.image(display_frame, channels="RGB", use_container_width=True)
+                        video_placeholder.image(display_frame, channels="RGB", width=None)
 
-                    # Rerun to get next frame (creates video loop effect)
-                    time.sleep(0.03)  # Small delay to prevent overwhelming
-                    st.rerun()
+                    # Auto-refresh option (can be disabled to allow scrolling)
+                    auto_refresh = st.session_state.get("auto_refresh", True)
+
+                    # Rerun only if detection is still running and auto-refresh is enabled
+                    # This allows user to scroll when auto-refresh is disabled
+                    if st.session_state.get("detection_running", False) and auto_refresh:
+                        time.sleep(0.03)  # ~30 FPS
+                        st.rerun()
+                    elif st.session_state.get("detection_running", False) and not auto_refresh:
+                        # Show message that user can manually refresh (only once)
+                        if "manual_refresh_shown" not in st.session_state:
+                            status_placeholder.info("💡 Auto-refresh desactivado. Usa el botón 'Actualizar Frame' para ver el siguiente frame, o activa 'Auto-refresh' para actualización automática")
+                            st.session_state["manual_refresh_shown"] = True
 
             except Exception as e:
-                st.error(f"❌ Error en el loop de detección: {e}")
+                status_placeholder.error(f"❌ Error en el loop de detección: {e}")
                 import traceback
                 print(traceback.format_exc())
                 # Cleanup on error

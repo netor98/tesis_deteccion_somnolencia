@@ -12,7 +12,7 @@ def check_v4l2_devices():
     print("=" * 60)
     print("1. Verificando dispositivos de video (v4l2)...")
     print("=" * 60)
-    
+
     import subprocess
     try:
         result = subprocess.run(
@@ -24,7 +24,7 @@ def check_v4l2_devices():
         if result.returncode == 0:
             output = result.stdout
             print(output)
-            
+
             # Check if there are actual camera devices (not just system devices)
             if "camera" in output.lower() or "usb" in output.lower():
                 print("\n✅ Se detectaron dispositivos de cámara USB")
@@ -40,7 +40,7 @@ def check_v4l2_devices():
         print("💡 Instala con: sudo apt-get install v4l-utils")
     except Exception as e:
         print(f"❌ Error: {e}")
-    
+
     # Also check USB devices
     print("\n   Verificando dispositivos USB conectados...")
     try:
@@ -91,18 +91,18 @@ def check_opencv():
     print("\n" + "=" * 60)
     print("3. Verificando acceso con OpenCV...")
     print("=" * 60)
-    
+
     try:
         import cv2
         print("✅ OpenCV está instalado")
-        
+
         # First, try to find actual camera devices (not system devices)
         import glob
         video_devices = sorted(glob.glob("/dev/video*"))
-        
+
         # Filter out system devices (usually video19+)
         camera_devices = [d for d in video_devices if int(d.split('video')[1]) < 20]
-        
+
         if camera_devices:
             print(f"\n   Encontrados {len(camera_devices)} dispositivo(s) de cámara potencial(es):")
             for dev in camera_devices:
@@ -110,7 +110,7 @@ def check_opencv():
         else:
             print("\n   ⚠️ No se encontraron dispositivos de cámara en /dev/video0-19")
             print("   Los dispositivos video19+ son internos del sistema, no cámaras")
-        
+
         # Try to open camera by index
         print("\n   Intentando abrir cámaras por índice...")
         found_camera = False
@@ -130,7 +130,7 @@ def check_opencv():
                     cap.release()
             else:
                 cap.release()
-        
+
         if not found_camera:
             print("   ❌ No se pudo abrir ninguna cámara funcional con OpenCV")
             print("\n   💡 Posibles soluciones:")
@@ -138,7 +138,7 @@ def check_opencv():
             print("      - Prueba con: lsusb (debe mostrar la cámara)")
             print("      - Reinicia la Raspberry Pi después de conectar la cámara")
             print("      - Verifica que la cámara no esté siendo usada por otro proceso")
-            
+
     except ImportError:
         print("❌ OpenCV no está instalado")
         print("💡 Instala con: pip install opencv-python")
