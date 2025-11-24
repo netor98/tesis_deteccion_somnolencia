@@ -8,9 +8,12 @@ Contains default thresholds, landmark indices, and other configuration constants
 DEFAULT_THRESHOLDS = {
     "EAR_THRESH": 0.18,      # Eye Aspect Ratio threshold (ideal: 0.15-0.2)
     "MAR_THRESH": 0.6,       # Mouth Aspect Ratio threshold (ideal: 0.5-0.7)
-    "WAIT_TIME": 1.0,        # Time in seconds before alarm triggers
+    "WAIT_TIME": 1.0,        # Time in seconds before alarm triggers (for yawn)
+    "HEAD_TILT_WAIT_TIME": 4.0,  # Time in seconds before head tilt alarm triggers (increased for less false positives)
+    "PERCLOS_WINDOW": 30.0,  # PERCLOS calculation window in seconds (typical: 30-60)
+    "PERCLOS_THRESH": 35.0,  # PERCLOS threshold percentage (typical: 15-20%)
     "ROLL_THRESH": 20.0,     # Head roll (tilt left/right) threshold in degrees
-    "PITCH_THRESH": 15.0,    # Head pitch (nodding up/down) threshold in degrees
+    "PITCH_THRESH": 12.0,    # Head pitch (nodding up/down) threshold in degrees (improved sensitivity)
     "YAW_THRESH": 15.0,      # Head yaw (turning left/right) threshold in degrees
 }
 

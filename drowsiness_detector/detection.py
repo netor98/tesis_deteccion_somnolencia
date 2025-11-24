@@ -130,6 +130,9 @@ def calculate_mar(landmarks, mouth_idxs, image_w, image_h):
 def calculate_head_pose(landmarks, head_pose_idxs, image_w, image_h):
     """Calculate head pose angles (roll, pitch, yaw) using facial landmarks.
 
+    Improved calculation using multiple reference points for better accuracy,
+    especially for pitch (forward/backward head tilt).
+
     Args:
         landmarks: Detected landmarks list
         head_pose_idxs: Dictionary of head pose landmark indices
@@ -146,38 +149,73 @@ def calculate_head_pose(landmarks, head_pose_idxs, image_w, image_h):
         if None in coords_points.values():
             return {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}, None
 
-        # Calculate Roll (tilt left/right) using eye corners
         left_eye = coords_points["left_eye"]
         right_eye = coords_points["right_eye"]
-        roll = np.degrees(np.arctan2(right_eye[1] - left_eye[1], right_eye[0] - left_eye[0]))
-
-        # Calculate Yaw (turning left/right) using face width
+        nose_tip = coords_points["nose_tip"]
+        forehead = coords_points["forehead"]
+        chin = coords_points["chin"]
         face_left = coords_points["face_left"]
         face_right = coords_points["face_right"]
-        nose_tip = coords_points["nose_tip"]
 
-        # Calculate distances from nose to left and right face edges
-        dist_left = distance(nose_tip, face_left)
-        dist_right = distance(nose_tip, face_right)
+        # Calculate Roll (tilt left/right) using eye corners
+        # This is accurate and doesn't need improvement
+        roll = np.degrees(np.arctan2(right_eye[1] - left_eye[1], right_eye[0] - left_eye[0]))
+
+        # Calculate Yaw (turning left/right) using face width and nose position
+        # Improved: Use both horizontal position and distance ratios
+        face_center_x = (face_left[0] + face_right[0]) / 2.0
         face_width = distance(face_left, face_right)
 
-        # Yaw is positive when turning right (more of right side visible)
-        # Negative when turning left (more of left side visible)
+        # Calculate nose offset from face center
+        nose_offset_x = nose_tip[0] - face_center_x
+
         if face_width > 0:
-            yaw = np.degrees(np.arcsin((dist_right - dist_left) / face_width))
+            # Normalize offset by face width and calculate angle
+            normalized_offset = nose_offset_x / (face_width / 2.0)
+            # Clamp to [-1, 1] to avoid arcsin domain errors
+            normalized_offset = np.clip(normalized_offset, -1.0, 1.0)
+            yaw = np.degrees(np.arcsin(normalized_offset))
         else:
             yaw = 0.0
 
-        # Calculate Pitch (nodding up/down) using forehead and chin
-        forehead = coords_points["forehead"]
-        chin = coords_points["chin"]
+        # Calculate Pitch (nodding up/down) - ADAPTED FOR OVERHEAD CAMERA (REARVIEW MIRROR POSITION)
+        # Camera is positioned above driver (like rearview mirror), looking down
+        # This changes the perspective: nose appears lower in the image naturally
+        # We need to detect changes from this baseline position
 
-        # Calculate the angle between forehead-chin line and horizontal
-        vertical_dist = chin[1] - forehead[1]
-        horizontal_dist = abs(chin[0] - forehead[0])
+        # Calculate eye center (midpoint between left and right eye)
+        eye_center_y = (left_eye[1] + right_eye[1]) / 2.0
 
-        if horizontal_dist > 0:
-            pitch = np.degrees(np.arctan2(vertical_dist, horizontal_dist)) - 90
+        # Calculate face height (forehead to chin)
+        face_height = abs(chin[1] - forehead[1])
+
+        # Calculate where nose is positioned vertically in the face
+        # In overhead camera view, nose is naturally lower in the image
+        nose_position_in_face = (nose_tip[1] - forehead[1]) / face_height if face_height > 0 else 0.5
+
+        # In overhead camera perspective:
+        # - Neutral position: nose is typically at 0.35-0.45 of face height from forehead
+        # - Head tilts forward: nose moves down more (ratio increases toward 0.5+)
+        # - Head tilts backward: nose moves up (ratio decreases toward 0.3-)
+
+        if face_height > 20:
+            # Neutral position for overhead camera (nose appears lower naturally)
+            # Adjusted for your specific setup: if pitch is 15-25 in neutral,
+            # we need to increase the neutral position significantly
+            # With scale factor 2.5: 15° ≈ 0.11 deviation, 25° ≈ 0.19 deviation
+            # So nose is at ~0.51-0.59 of face height, neutral should be ~0.52-0.54
+            neutral_nose_position = 0.52  # Increased to compensate for 15-25° pitch in neutral
+
+            # Calculate deviation from neutral
+            position_deviation = nose_position_in_face - neutral_nose_position
+
+            # Convert deviation to pitch angle
+            # Scale factor: 0.1 position change ≈ 12-15 degrees of head tilt
+            # Use moderate scaling for overhead camera perspective
+            pitch = np.degrees(np.arctan(position_deviation * 2.5))
+
+            # Clamp to reasonable range
+            pitch = np.clip(pitch, -45.0, 45.0)
         else:
             pitch = 0.0
 
@@ -187,7 +225,8 @@ def calculate_head_pose(landmarks, head_pose_idxs, image_w, image_h):
             "yaw": round(yaw, 2)
         }
 
-    except Exception:
+    except Exception as e:
+        # Log error for debugging but return default values
         angles = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
         coords_points = None
 
@@ -199,43 +238,89 @@ class StateTracker:
 
     def __init__(self):
         """Initialize state tracker with default values."""
-        self.drowsy_start_time = time.perf_counter()
         self.yawn_start_time = time.perf_counter()
-        self.head_tilt_start_time = time.perf_counter()
-        self.drowsy_time = 0.0
+        self.head_tilt_start_time = 0.0  # Initialize to 0, will be set when condition starts
         self.yawn_time = 0.0
         self.head_tilt_time = 0.0
         self.color = COLORS["GREEN"]
         self.play_alarm = False
+
+        # PERCLOS tracking: store eye closure states with timestamps
+        self.eye_closure_history = []  # List of (timestamp, is_closed) tuples
+        self.perclos_window = 30.0  # Window size in seconds (30 seconds for real-time)
+        self.perclos_threshold = 0.15  # 15% threshold for drowsiness (typical: 15-20%)
+        self.current_perclos = 0.0
 
     def reset_all(self):
         """Reset all timers and state."""
-        self.drowsy_start_time = time.perf_counter()
         self.yawn_start_time = time.perf_counter()
-        self.head_tilt_start_time = time.perf_counter()
-        self.drowsy_time = 0.0
+        self.head_tilt_start_time = 0.0  # Initialize to 0, will be set when condition starts
         self.yawn_time = 0.0
         self.head_tilt_time = 0.0
         self.color = COLORS["GREEN"]
         self.play_alarm = False
+        self.eye_closure_history.clear()
+        self.current_perclos = 0.0
 
-    def update_drowsy(self, condition_met, wait_time):
-        """Update drowsy state based on condition.
+    def update_perclos(self, eyes_closed: bool, current_time: float):
+        """Update PERCLOS (Percentage of Eyelid Closure) calculation.
+
+        PERCLOS is the percentage of time eyes are closed during a time window.
+        This is a standard metric for drowsiness detection.
 
         Args:
-            condition_met: Boolean indicating if drowsy condition is met
-            wait_time: Time threshold before alarm triggers
+            eyes_closed: Boolean indicating if eyes are currently closed (EAR < threshold)
+            current_time: Current timestamp
         """
-        if condition_met:
-            end_time = time.perf_counter()
-            self.drowsy_time += end_time - self.drowsy_start_time
-            self.drowsy_start_time = end_time
+        # Add current state to history
+        self.eye_closure_history.append((current_time, eyes_closed))
+
+        # Remove old entries outside the time window
+        cutoff_time = current_time - self.perclos_window
+        self.eye_closure_history = [(t, state) for t, state in self.eye_closure_history
+                                     if t >= cutoff_time]
+
+        # Calculate PERCLOS: percentage of time eyes were closed in the window
+        if len(self.eye_closure_history) < 2:
+            self.current_perclos = 0.0
+            return
+
+        # Calculate total time with eyes closed
+        total_closed_time = 0.0
+        window_start = self.eye_closure_history[0][0]
+        window_end = current_time
+        window_duration = window_end - window_start
+
+        if window_duration <= 0:
+            self.current_perclos = 0.0
+            return
+
+        # Calculate closed time by summing intervals where eyes were closed
+        prev_time = window_start
+        prev_closed = False
+
+        for timestamp, is_closed in self.eye_closure_history:
+            if prev_closed:
+                total_closed_time += timestamp - prev_time
+            prev_time = timestamp
+            prev_closed = is_closed
+
+        # Add time from last entry to current time if eyes are currently closed
+        if eyes_closed:
+            total_closed_time += current_time - prev_time
+
+        # Calculate PERCLOS percentage
+        self.current_perclos = (total_closed_time / window_duration) * 100.0
+
+        # Update alarm state based on PERCLOS threshold
+        if self.current_perclos >= (self.perclos_threshold * 100.0):
             self.color = COLORS["RED"]
-            if self.drowsy_time >= wait_time:
-                self.play_alarm = True
+            self.play_alarm = True
         else:
-            self.drowsy_start_time = time.perf_counter()
-            self.drowsy_time = 0.0
+            # Only reset alarm if no other conditions are met
+            if not (self.yawn_time > 0 or self.head_tilt_time > 0):
+                self.color = COLORS["GREEN"]
+                self.play_alarm = False
 
     def update_yawn(self, condition_met, wait_time):
         """Update yawn state based on condition.
@@ -262,15 +347,24 @@ class StateTracker:
             condition_met: Boolean indicating if head tilt condition is met
             wait_time: Time threshold before alarm triggers
         """
+        current_time = time.perf_counter()
+
         if condition_met:
-            end_time = time.perf_counter()
-            self.head_tilt_time += end_time - self.head_tilt_start_time
-            self.head_tilt_start_time = end_time
+            # If condition is met, calculate elapsed time since condition started
+            if self.head_tilt_start_time == 0:
+                # Condition just started, initialize start time
+                self.head_tilt_start_time = current_time
+                self.head_tilt_time = 0.0
+            else:
+                # Condition continues, accumulate time
+                self.head_tilt_time = current_time - self.head_tilt_start_time
+
             self.color = COLORS["RED"]
             if self.head_tilt_time >= wait_time:
                 self.play_alarm = True
         else:
-            self.head_tilt_start_time = time.perf_counter()
+            # Condition not met, reset timer
+            self.head_tilt_start_time = 0.0
             self.head_tilt_time = 0.0
 
 
@@ -295,6 +389,8 @@ class VideoFrameHandler:
         self.last_reading_time = 0.0
         self.reading_interval = 2.0  # Send reading every 2 seconds
         self.last_alarm_state = False
+        self.perclos_window_size = 30.0  # PERCLOS window in seconds
+        self.perclos_threshold_pct = 15.0  # PERCLOS threshold percentage
 
     def process(self, frame: np.ndarray, thresholds: dict):
         """Process a video frame and detect drowsiness indicators.
@@ -339,11 +435,20 @@ class VideoFrameHandler:
             frame = self._plot_eye_landmarks(frame, eye_coordinates[0], eye_coordinates[1])
             frame = self._plot_mouth_landmarks(frame, mouth_coordinates)
 
-            # Check drowsiness (EAR)
+            # Check drowsiness using PERCLOS (Percentage of Eyelid Closure)
             ear_threshold = thresholds.get("EAR_THRESH", 0.18)
-            self.state_tracker.update_drowsy(ear < ear_threshold, thresholds.get("WAIT_TIME", 1.0))
+            eyes_closed = ear < ear_threshold
 
-            if ear < ear_threshold and self.state_tracker.drowsy_time >= thresholds.get("WAIT_TIME", 1.0):
+            # Update PERCLOS calculation
+            perclos_window = thresholds.get("PERCLOS_WINDOW", self.perclos_window_size)
+            perclos_threshold = thresholds.get("PERCLOS_THRESH", self.perclos_threshold_pct) / 100.0
+
+            self.state_tracker.perclos_window = perclos_window
+            self.state_tracker.perclos_threshold = perclos_threshold
+            self.state_tracker.update_perclos(eyes_closed, current_time)
+
+            # Show alert if PERCLOS exceeds threshold
+            if self.state_tracker.current_perclos >= (perclos_threshold * 100.0):
                 self._plot_text(frame, "ALERTA!!!", alarm_pos, self.state_tracker.color)
 
             # Check yawning (MAR)
@@ -353,33 +458,61 @@ class VideoFrameHandler:
             if mar > mar_threshold and self.state_tracker.yawn_time >= thresholds.get("WAIT_TIME", 1.0):
                 self._plot_text(frame, "BOSTEZO!!!", alarm_pos, self.state_tracker.color)
 
-            # Check head tilt
+            # Check head tilt - Improved detection with separate thresholds
             tilt_detected = False
+            tilt_type = None
             if head_pose_angles:
                 roll_thresh = thresholds.get("ROLL_THRESH", 20.0)
-                pitch_thresh = thresholds.get("PITCH_THRESH", 15.0)
+                pitch_thresh = thresholds.get("PITCH_THRESH", 12.0)  # Lowered for better forward/backward detection
                 yaw_thresh = thresholds.get("YAW_THRESH", 15.0)
 
                 roll_abs = abs(head_pose_angles["roll"])
                 pitch_abs = abs(head_pose_angles["pitch"])
                 yaw_abs = abs(head_pose_angles["yaw"])
 
-                tilt_detected = (roll_abs > roll_thresh or
-                               pitch_abs > pitch_thresh or
-                               yaw_abs > yaw_thresh)
+                # Detect specific types of head tilt
+                roll_tilt = roll_abs > roll_thresh
+                pitch_tilt = pitch_abs > pitch_thresh
+                yaw_tilt = yaw_abs > yaw_thresh
 
-                self.state_tracker.update_head_tilt(tilt_detected, thresholds.get("WAIT_TIME", 1.0))
+                # Determine tilt type for better feedback
+                if pitch_tilt:
+                    if head_pose_angles["pitch"] > 0:
+                        tilt_type = "CABEZA HACIA ADELANTE"
+                    else:
+                        tilt_type = "CABEZA HACIA ATRÁS"
+                elif roll_tilt:
+                    if head_pose_angles["roll"] > 0:
+                        tilt_type = "CABEZA INCLINADA DERECHA"
+                    else:
+                        tilt_type = "CABEZA INCLINADA IZQUIERDA"
+                elif yaw_tilt:
+                    if head_pose_angles["yaw"] > 0:
+                        tilt_type = "CABEZA GIRADA DERECHA"
+                    else:
+                        tilt_type = "CABEZA GIRADA IZQUIERDA"
 
-                if tilt_detected and self.state_tracker.head_tilt_time >= thresholds.get("WAIT_TIME", 1.0):
-                    self._plot_text(frame, "CABEZA INCLINADA!!!", alarm_pos, self.state_tracker.color)
+                tilt_detected = roll_tilt or pitch_tilt or yaw_tilt
+
+                # Use specific wait time for head tilt (longer than yawn to reduce false positives)
+                head_tilt_wait_time = thresholds.get("HEAD_TILT_WAIT_TIME", 3.0)
+                self.state_tracker.update_head_tilt(tilt_detected, head_tilt_wait_time)
+
+                if tilt_detected and self.state_tracker.head_tilt_time >= head_tilt_wait_time:
+                    if tilt_type:
+                        self._plot_text(frame, f"{tilt_type}!!!", alarm_pos, self.state_tracker.color)
+                    else:
+                        self._plot_text(frame, "CABEZA INCLINADA!!!", alarm_pos, self.state_tracker.color)
 
             # Update color if no alerts
-            if not (ear < ear_threshold or mar > mar_threshold or tilt_detected):
-                if not any([self.state_tracker.drowsy_time > 0,
-                           self.state_tracker.yawn_time > 0,
+            # PERCLOS is handled in update_perclos, so we only check yawn and head tilt here
+            if not (mar > mar_threshold or tilt_detected):
+                if not any([self.state_tracker.yawn_time > 0,
                            self.state_tracker.head_tilt_time > 0]):
-                    self.state_tracker.color = COLORS["GREEN"]
-                    self.state_tracker.play_alarm = False
+                    # PERCLOS alarm is handled separately in update_perclos
+                    if self.state_tracker.current_perclos < (perclos_threshold * 100.0):
+                        self.state_tracker.color = COLORS["GREEN"]
+                        self.state_tracker.play_alarm = False
 
             # Display metrics
             self._display_metrics(frame, ear, mar, head_pose_angles,
@@ -389,8 +522,8 @@ class VideoFrameHandler:
             if self.viaje_id and (current_time - self.last_reading_time) >= self.reading_interval:
                 reading_data = {
                     "id_viaje": self.viaje_id,
-                    "percios": ear,  # Using EAR as percios value
-                    "conteo_cabeceos": 1 if ear < thresholds.get("EAR_THRESH", 0.18) else 0,
+                    "percios": self.state_tracker.current_perclos,  # Using PERCLOS as percios value
+                    "conteo_cabeceos": 1 if eyes_closed else 0,  # Current frame eye closure state
                     "conteo_bostezos": 1 if mar > thresholds.get("MAR_THRESH", 0.6) else 0,
                 }
                 send_reading_async(reading_data)
@@ -453,20 +586,30 @@ class VideoFrameHandler:
         mar_txt = f"MAR: {round(mar, 2)}"
 
         if head_pose_angles:
-            head_pose_txt = (f"Roll: {head_pose_angles['roll']}° | "
-                           f"Pitch: {head_pose_angles['pitch']}° | "
-                           f"Yaw: {head_pose_angles['yaw']}°")
+            # Enhanced display with better formatting for pitch
+            pitch_value = head_pose_angles['pitch']
+            pitch_direction = ""
+            if abs(pitch_value) > 5:  # Show direction for significant pitch
+                if pitch_value > 0:
+                    pitch_direction = " (↓ Adelante)"
+                else:
+                    pitch_direction = " (↑ Atrás)"
+
+            head_pose_txt = (f"Roll: {head_pose_angles['roll']:.1f}° | "
+                           f"Pitch: {head_pose_angles['pitch']:.1f}°{pitch_direction} | "
+                           f"Yaw: {head_pose_angles['yaw']:.1f}°")
         else:
             head_pose_txt = "Head Pose: N/A"
 
-        drowsy_time_txt = f"TIEMPO: {round(self.state_tracker.drowsy_time, 3)} Secs"
+        # Display PERCLOS instead of drowsy time
+        perclos_txt = f"PERCLOS: {self.state_tracker.current_perclos:.1f}%"
         yawn_time_txt = f"BOSTEZO: {round(self.state_tracker.yawn_time, 3)} Secs"
         head_tilt_time_txt = f"INCLINACION: {round(self.state_tracker.head_tilt_time, 3)} Secs"
 
         self._plot_text(frame, ear_txt, self.text_positions["EAR"], self.state_tracker.color)
         self._plot_text(frame, mar_txt, self.text_positions["MAR"], self.state_tracker.color)
         self._plot_text(frame, head_pose_txt, self.text_positions["HEAD_POSE"], self.state_tracker.color)
-        self._plot_text(frame, drowsy_time_txt, drowsy_time_pos, self.state_tracker.color)
+        self._plot_text(frame, perclos_txt, drowsy_time_pos, self.state_tracker.color)
         self._plot_text(frame, yawn_time_txt, yawn_time_pos, self.state_tracker.color)
         self._plot_text(frame, head_tilt_time_txt, head_tilt_time_pos, self.state_tracker.color)
 
