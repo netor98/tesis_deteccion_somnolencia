@@ -220,8 +220,17 @@ if "video_handler" not in st.session_state or st.session_state.get("last_viaje_i
     st.session_state["video_handler"] = VideoFrameHandler(viaje_id=viaje_id)
     st.session_state["last_viaje_id"] = viaje_id
 
-video_handler = st.session_state["video_handler"]
-audio_handler = AudioFrameHandler(sound_file_path=alarm_file_path)
+# Get handlers with error checking
+video_handler = st.session_state.get("video_handler")
+if video_handler is None:
+    st.error("⚠️ El procesador de video no está inicializado")
+    st.stop()
+
+try:
+    audio_handler = AudioFrameHandler(sound_file_path=alarm_file_path)
+except Exception as e:
+    st.error(f"Error al inicializar el procesador de audio: {e}")
+    st.stop()
 
 lock = threading.Lock()  # For thread-safe access & to prevent race-condition.
 shared_state = {"play_alarm": False}
@@ -229,22 +238,56 @@ shared_state = {"play_alarm": False}
 
 def video_frame_callback(frame: av.VideoFrame):
     """Callback function to process video frames."""
-    frame = frame.to_ndarray(format="bgr24")  # Decode and convert frame to RGB
-    # print(frame)
+    try:
+        # Convert frame to numpy array
+        frame_array = frame.to_ndarray(format="bgr24")
 
-    frame, play_alarm = video_handler.process(frame, thresholds)  # Process frame
-    with lock:
-        shared_state["play_alarm"] = play_alarm  # Update shared state
+        # Validate frame
+        if frame_array is None or frame_array.size == 0:
+            return frame
 
-    return av.VideoFrame.from_ndarray(frame, format="bgr24")  # Encode and return BGR frame
+        # Process frame with error handling and timeout protection
+        try:
+            processed_frame, play_alarm = video_handler.process(frame_array, thresholds)
+
+            # Validate processed frame
+            if processed_frame is None or processed_frame.size == 0:
+                processed_frame = frame_array
+                play_alarm = False
+
+        except Exception as e:
+            # If processing fails, return original frame
+            import traceback
+            print(f"Error processing frame: {e}")
+            print(traceback.format_exc())
+            processed_frame = frame_array
+            play_alarm = False
+
+        # Update shared state
+        with lock:
+            shared_state["play_alarm"] = play_alarm
+
+        # Return processed frame
+        return av.VideoFrame.from_ndarray(processed_frame, format="bgr24")
+    except Exception as e:
+        # If callback fails completely, return original frame
+        import traceback
+        print(f"Error in video_frame_callback: {e}")
+        print(traceback.format_exc())
+        return frame
 
 
 def audio_frame_callback(frame: av.AudioFrame):
-    with lock:  # access the current “play_alarm” state
-        play_alarm = shared_state["play_alarm"]
+    try:
+        with lock:  # access the current "play_alarm" state
+            play_alarm = shared_state.get("play_alarm", False)
 
-    new_frame: av.AudioFrame = audio_handler.process(frame, play_sound=play_alarm)
-    return new_frame
+        new_frame: av.AudioFrame = audio_handler.process(frame, play_sound=play_alarm)
+        return new_frame
+    except Exception as e:
+        # If audio callback fails, return original frame
+        print(f"Error in audio_frame_callback: {e}")
+        return frame
 
 # WebRTC streamer component (protocol that handles video and audio streaming)
 # Note: This requires browser access to camera, not server-side camera access
@@ -283,6 +326,10 @@ else:
         """)
 
     # WebRTC streamer
+    # Note: webrtc_streamer is non-blocking, it renders the component immediately
+    st.info("💡 **Instrucciones**: Haz clic en el botón 'Start' debajo para iniciar la detección")
+    st.info("⚠️ **Importante**: Acepta el permiso de cámara cuando el navegador lo solicite")
+
     try:
         ctx = webrtc_streamer(
             key="drowsiness-detection",
@@ -305,12 +352,20 @@ else:
             ),
         )
 
-        if ctx.state.playing:
-            st.success("✅ Cámara activa - Detección en curso")
-        elif ctx.state.playing is False:
-            st.info("⏸️ Cámara pausada - Haz clic en 'Start' para iniciar")
+        # Check state after initialization (with delay to allow component to initialize)
+        if ctx:
+            if hasattr(ctx, 'state'):
+                if ctx.state.playing:
+                    st.success("✅ Cámara activa - Detección en curso")
+                elif ctx.state.playing is False:
+                    st.info("⏸️ Cámara pausada - Haz clic en 'Start' para iniciar")
+                else:
+                    st.warning("⚠️ Esperando acceso a la cámara...")
+                    st.info("💡 Acepta el permiso de cámara cuando el navegador lo solicite")
+            else:
+                st.info("💡 Haz clic en 'Start' para iniciar la detección")
         else:
-            st.warning("⚠️ Esperando acceso a la cámara...")
+            st.warning("⚠️ Componente de video no inicializado")
 
     except Exception as e:
         error_msg = str(e)
