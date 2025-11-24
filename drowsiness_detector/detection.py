@@ -11,19 +11,22 @@ import mediapipe as mp
 import cv2
 
 from .utils import distance, get_landmark_coordinates
-from .config import LANDMARK_INDICES, MEDIAPIPE_CONFIG, COLORS, TEXT_POSITIONS
+from .config import LANDMARK_INDICES, MEDIAPIPE_CONFIG, MEDIAPIPE_CONFIG_RASPBERRY_PI, COLORS, TEXT_POSITIONS
 
 
-def get_mediapipe_app(**kwargs):
+def get_mediapipe_app(use_raspberry_pi_optimization=False, **kwargs):
     """Initialize and return MediaPipe FaceMesh Solution Graph object.
 
     Args:
-        **kwargs: MediaPipe configuration parameters
+        use_raspberry_pi_optimization: If True, uses optimized config for Raspberry Pi
+        **kwargs: MediaPipe configuration parameters (override defaults)
 
     Returns:
         FaceMesh: Initialized MediaPipe FaceMesh object
     """
-    config = {**MEDIAPIPE_CONFIG, **kwargs}
+    # Use Raspberry Pi optimized config if requested
+    base_config = MEDIAPIPE_CONFIG_RASPBERRY_PI if use_raspberry_pi_optimization else MEDIAPIPE_CONFIG
+    config = {**base_config, **kwargs}
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         max_num_faces=config["max_num_faces"],
         refine_landmarks=config["refine_landmarks"],
@@ -371,17 +374,18 @@ class StateTracker:
 class VideoFrameHandler:
     """Main handler for processing video frames and detecting drowsiness."""
 
-    def __init__(self, viaje_id: int = None):
+    def __init__(self, viaje_id: int = None, use_raspberry_pi_optimization=False):
         """Initialize the video frame handler with MediaPipe and state tracking.
 
         Args:
             viaje_id: ID of the active trip to send detections to backend
+            use_raspberry_pi_optimization: If True, uses optimized MediaPipe config for Raspberry Pi
         """
         self.eye_idxs = LANDMARK_INDICES["eye"]
         self.mouth_idxs = LANDMARK_INDICES["mouth"]
         self.head_pose_idxs = LANDMARK_INDICES["head_pose"]
 
-        self.facemesh_model = get_mediapipe_app()
+        self.facemesh_model = get_mediapipe_app(use_raspberry_pi_optimization=use_raspberry_pi_optimization)
         self.state_tracker = StateTracker()
 
         self.text_positions = TEXT_POSITIONS.copy()

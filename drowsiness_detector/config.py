@@ -45,9 +45,19 @@ LANDMARK_INDICES = {
 }
 
 # MediaPipe FaceMesh configuration
+# Note: refine_landmarks=True provides more accurate landmarks but is slower
+# Set to False for better performance on Raspberry Pi
 MEDIAPIPE_CONFIG = {
     "max_num_faces": 1,
-    "refine_landmarks": True,
+    "refine_landmarks": True,  # Set to False for better performance on Raspberry Pi
+    "min_detection_confidence": 0.5,
+    "min_tracking_confidence": 0.5,
+}
+
+# Optimized config for Raspberry Pi (can be used if performance is an issue)
+MEDIAPIPE_CONFIG_RASPBERRY_PI = {
+    "max_num_faces": 1,
+    "refine_landmarks": False,  # Disabled for better performance
     "min_detection_confidence": 0.5,
     "min_tracking_confidence": 0.5,
 }

@@ -78,6 +78,40 @@ with st.sidebar:
         )
         st.session_state["camera_index"] = camera_index
 
+        # Performance settings for Raspberry Pi
+        import platform
+        is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
+
+        if is_raspberry:
+            st.info("🍓 **Raspberry Pi detectada** - Configuración optimizada activada")
+
+            # FPS setting (lower for Raspberry Pi)
+            target_fps = st.slider(
+                "FPS objetivo",
+                min_value=5,
+                max_value=30,
+                value=st.session_state.get("target_fps", 15),
+                help="FPS más bajos mejoran el rendimiento en Raspberry Pi. Recomendado: 10-15 FPS",
+                key="target_fps_slider"
+            )
+            st.session_state["target_fps"] = target_fps
+            st.session_state["frame_delay"] = 1.0 / target_fps
+
+            # Resolution setting
+            resolution = st.selectbox(
+                "Resolución de video",
+                ["640x480", "320x240"],
+                index=0 if st.session_state.get("video_resolution", "640x480") == "640x480" else 1,
+                help="Resolución más baja mejora el rendimiento",
+                key="video_resolution_select"
+            )
+            st.session_state["video_resolution"] = resolution
+        else:
+            # Default settings for more powerful machines
+            st.session_state["target_fps"] = st.session_state.get("target_fps", 30)
+            st.session_state["frame_delay"] = 1.0 / st.session_state["target_fps"]
+            st.session_state["video_resolution"] = st.session_state.get("video_resolution", "640x480")
+
         # Auto-refresh toggle (allows user to disable auto-refresh for scrolling)
         auto_refresh = st.checkbox(
             "Auto-refresh (actualización automática)",
@@ -252,8 +286,15 @@ thresholds = DEFAULT_THRESHOLDS.copy()
 viaje_id = st.session_state.get("viaje_id")
 
 # Initialize handlers (video_handler will be recreated if viaje_id changes)
+# Detect if running on Raspberry Pi for optimization
+import platform
+is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
+
 if "video_handler" not in st.session_state or st.session_state.get("last_viaje_id") != viaje_id:
-    st.session_state["video_handler"] = VideoFrameHandler(viaje_id=viaje_id)
+    st.session_state["video_handler"] = VideoFrameHandler(
+        viaje_id=viaje_id,
+        use_raspberry_pi_optimization=is_raspberry
+    )
     st.session_state["last_viaje_id"] = viaje_id
 
 # Get handlers with error checking
@@ -358,6 +399,15 @@ else:
                         st.error(f"❌ No se pudo abrir la cámara {camera_index}")
                         st.info("💡 Verifica que la cámara esté conectada y que tengas permisos")
                     else:
+                        # Set camera resolution if specified
+                        resolution = st.session_state.get("video_resolution", "640x480")
+                        if resolution == "640x480":
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        elif resolution == "320x240":
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+
                         st.session_state["camera_capture"] = cap
                         st.session_state["detection_running"] = True
                         st.session_state["frame_count"] = 0
@@ -413,7 +463,7 @@ else:
                         display_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
 
                         # Display frame
-                        video_placeholder.image(display_frame, channels="RGB", width=None)
+                        video_placeholder.image(display_frame, channels="RGB", width='stretch')
 
                         # Update status (only show occasionally to reduce updates)
                         if "frame_count" not in st.session_state:
@@ -434,7 +484,7 @@ else:
                         print(traceback.format_exc())
                         # Show original frame on error
                         display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        video_placeholder.image(display_frame, channels="RGB", width=None)
+                        video_placeholder.image(display_frame, channels="RGB", width='stretch')
 
                     # Auto-refresh option (can be disabled to allow scrolling)
                     auto_refresh = st.session_state.get("auto_refresh", True)
@@ -442,7 +492,9 @@ else:
                     # Rerun only if detection is still running and auto-refresh is enabled
                     # This allows user to scroll when auto-refresh is disabled
                     if st.session_state.get("detection_running", False) and auto_refresh:
-                        time.sleep(0.03)  # ~30 FPS
+                        # Use configurable frame delay (optimized for Raspberry Pi)
+                        frame_delay = st.session_state.get("frame_delay", 0.03)  # Default ~30 FPS
+                        time.sleep(frame_delay)
                         st.rerun()
                     elif st.session_state.get("detection_running", False) and not auto_refresh:
                         # Show message that user can manually refresh (only once)
