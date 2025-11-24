@@ -49,6 +49,19 @@ with st.sidebar:
         key="api_url_input"
     )
 
+    # Camera Configuration (for Raspberry Pi)
+    st.subheader("Configuración de Cámara")
+    camera_info = st.info("💡 Si tienes problemas con la cámara, verifica los permisos y la conexión")
+
+    # Check if running on Raspberry Pi
+    import platform
+    is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
+
+    if is_raspberry:
+        st.warning("⚠️ Detectado: Raspberry Pi")
+        st.info("En Raspberry Pi, asegúrate de que la cámara esté habilitada:")
+        st.code("sudo raspi-config  # Enable camera interface", language="bash")
+
     # Update API client when URL changes
     if api_url_input != st.session_state.get("api_url"):
         st.session_state["api_url"] = api_url_input
@@ -234,12 +247,102 @@ def audio_frame_callback(frame: av.AudioFrame):
     return new_frame
 
 # WebRTC streamer component (protocol that handles video and audio streaming)
-ctx = webrtc_streamer(
-    key="drowsiness-detection",
-    video_frame_callback=video_frame_callback,
-    audio_frame_callback=audio_frame_callback,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},  # Add this to config for cloud deployment.
-    media_stream_constraints={"video": {"height": {"ideal": 480}}, "audio": True},
-    video_html_attrs=VideoHTMLAttributes(autoPlay=True, controls=False, muted=False),
-)
+# Note: This requires browser access to camera, not server-side camera access
+st.header("📹 Detección de Somnolencia")
+
+# Check if we have a trip connection
+if not st.session_state.get("viaje_id"):
+    st.warning("⚠️ Debes conectarte a un viaje activo antes de iniciar la detección")
+    st.info("💡 Usa el botón 'Buscar Viaje Activo' en la barra lateral")
+else:
+    st.info(f"✅ Conectado al viaje #{st.session_state.get('viaje_id')} - La detección está activa")
+
+    # Instructions for camera access
+    with st.expander("ℹ️ Instrucciones para acceder a la cámara"):
+        st.markdown("""
+        **Para usar la cámara en tu navegador:**
+
+        1. **Permisos del navegador**: Cuando se cargue el video, el navegador te pedirá permiso para acceder a la cámara. Debes aceptar.
+
+        2. **En Raspberry Pi**:
+           - Si accedes desde otra máquina: El navegador usará la cámara de esa máquina
+           - Si accedes localmente: El navegador usará la cámara de la Raspberry Pi (si está disponible)
+
+        3. **Verificar cámara disponible**:
+           ```bash
+           # En Raspberry Pi, verifica dispositivos de video:
+           v4l2-ctl --list-devices
+           ls -l /dev/video*
+           ```
+
+        4. **Si el error persiste**:
+           - Verifica que la cámara esté conectada y funcionando
+           - Prueba con otro navegador (Chrome, Firefox)
+           - Verifica que la URL sea `http://` o `https://` (no `file://`)
+           - Asegúrate de que el navegador tenga permisos de cámara
+        """)
+
+    # WebRTC streamer
+    try:
+        ctx = webrtc_streamer(
+            key="drowsiness-detection",
+            video_frame_callback=video_frame_callback,
+            audio_frame_callback=audio_frame_callback,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            media_stream_constraints={
+                "video": {
+                    "height": {"ideal": 480},
+                    "width": {"ideal": 640},
+                    "facingMode": "user"  # Front-facing camera
+                },
+                "audio": True
+            },
+            video_html_attrs=VideoHTMLAttributes(
+                autoPlay=True,
+                controls=False,
+                muted=False,
+                style={"width": "100%"}
+            ),
+        )
+
+        if ctx.state.playing:
+            st.success("✅ Cámara activa - Detección en curso")
+        elif ctx.state.playing is False:
+            st.info("⏸️ Cámara pausada - Haz clic en 'Start' para iniciar")
+        else:
+            st.warning("⚠️ Esperando acceso a la cámara...")
+
+    except Exception as e:
+        error_msg = str(e)
+        st.error(f"❌ Error al acceder a la cámara: {error_msg}")
+
+        if "NotFoundError" in error_msg or "device not found" in error_msg.lower():
+            st.error("**Problema**: No se encontró ningún dispositivo de cámara")
+            st.markdown("""
+            **Soluciones:**
+
+            1. **Verifica que la cámara esté conectada**:
+               - En Raspberry Pi: `lsusb` o `v4l2-ctl --list-devices`
+               - Verifica que aparezca `/dev/video0` o similar
+
+            2. **Permisos del navegador**:
+               - Asegúrate de que el navegador tenga permisos para acceder a la cámara
+               - Verifica la configuración de privacidad del navegador
+
+            3. **Acceso HTTPS/HTTP**:
+               - Algunos navegadores requieren HTTPS para acceder a la cámara
+               - Prueba accediendo con `https://` si es posible
+               - O usa `http://localhost` en lugar de la IP
+
+            4. **Reinicia la aplicación**:
+               ```bash
+               # Detén Streamlit (Ctrl+C) y reinicia:
+               streamlit run streamlit_app.py
+               ```
+            """)
+        else:
+            st.error(f"Error desconocido: {error_msg}")
+            st.info("💡 Intenta recargar la página o reiniciar la aplicación")
+
+        ctx = None
 
