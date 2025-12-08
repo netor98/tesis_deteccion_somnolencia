@@ -396,6 +396,11 @@ class VideoFrameHandler:
         self.perclos_window_size = 30.0  # PERCLOS window in seconds
         self.perclos_threshold_pct = 15.0  # PERCLOS threshold percentage
 
+    def reset_perclos(self):
+        """Reset PERCLOS value and all detection state to initial values."""
+        self.state_tracker.reset_all()
+        self.last_alarm_state = False
+
     def process(self, frame: np.ndarray, thresholds: dict):
         """Process a video frame and detect drowsiness indicators.
 
@@ -452,15 +457,16 @@ class VideoFrameHandler:
             self.state_tracker.update_perclos(eyes_closed, current_time)
 
             # Show alert if PERCLOS exceeds threshold
+            alert_text = None
             if self.state_tracker.current_perclos >= (perclos_threshold * 100.0):
-                self._plot_text(frame, "ALERTA!!!", alarm_pos, self.state_tracker.color)
+                alert_text = "ALERTA!!!"
 
             # Check yawning (MAR)
             mar_threshold = thresholds.get("MAR_THRESH", 0.6)
             self.state_tracker.update_yawn(mar > mar_threshold, thresholds.get("WAIT_TIME", 1.0))
 
             if mar > mar_threshold and self.state_tracker.yawn_time >= thresholds.get("WAIT_TIME", 1.0):
-                self._plot_text(frame, "BOSTEZO!!!", alarm_pos, self.state_tracker.color)
+                alert_text = "BOSTEZO!!!"
 
             # Check head tilt - Improved detection with separate thresholds
             tilt_detected = False
@@ -504,9 +510,9 @@ class VideoFrameHandler:
 
                 if tilt_detected and self.state_tracker.head_tilt_time >= head_tilt_wait_time:
                     if tilt_type:
-                        self._plot_text(frame, f"{tilt_type}!!!", alarm_pos, self.state_tracker.color)
+                        alert_text = f"{tilt_type}!!!"
                     else:
-                        self._plot_text(frame, "CABEZA INCLINADA!!!", alarm_pos, self.state_tracker.color)
+                        alert_text = "CABEZA INCLINADA!!!"
 
             # Update color if no alerts
             # PERCLOS is handled in update_perclos, so we only check yawn and head tilt here
@@ -518,9 +524,18 @@ class VideoFrameHandler:
                         self.state_tracker.color = COLORS["GREEN"]
                         self.state_tracker.play_alarm = False
 
-            # Display metrics
-            self._display_metrics(frame, ear, mar, head_pose_angles,
-                                drowsy_time_pos, yawn_time_pos, head_tilt_time_pos)
+            # Build metrics dictionary to return
+            metrics = {
+                "ear": round(ear, 3),
+                "mar": round(mar, 3),
+                "perclos": round(self.state_tracker.current_perclos, 1),
+                "yawn_time": round(self.state_tracker.yawn_time, 2),
+                "head_tilt_time": round(self.state_tracker.head_tilt_time, 2),
+                "head_pose": head_pose_angles if head_pose_angles else {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+                "alert_text": alert_text,
+                "tilt_type": tilt_type,
+                "is_alarm": self.state_tracker.play_alarm,
+            }
 
             # Send periodic readings to backend
             if self.viaje_id and (current_time - self.last_reading_time) >= self.reading_interval:
@@ -535,25 +550,38 @@ class VideoFrameHandler:
 
             # Send alert when alarm state changes from False to True
             if self.viaje_id and self.state_tracker.play_alarm and not self.last_alarm_state:
-                alert_type = "DROWSINESS"
-                if mar > thresholds.get("MAR_THRESH", 0.6):
-                    alert_type = "YAWNING"
-                elif tilt_detected:
-                    alert_type = "HEAD_TILT"
+                # Determine alert type based on what triggered it
+                alert_type = "SOMNOLENCIA_PERCLOS"
+                if self.state_tracker.yawn_time > 0 and self.state_tracker.yawn_time >= thresholds.get("WAIT_TIME", 1.0):
+                    alert_type = "SOMNOLENCIA_BOSTEZOS"
+                elif tilt_detected and self.state_tracker.head_tilt_time >= thresholds.get("HEAD_TILT_WAIT_TIME", 3.0):
+                    alert_type = "SOMNOLENCIA_CABECEOS"
 
                 alert_data = {
                     "id_viaje": self.viaje_id,
                     "tipo_alerta": alert_type,
-                    "nivel_somnolencia": "ALTA" if self.state_tracker.play_alarm else "MEDIA",
+                    "nivel_somnolencia": "CRITICO" if self.state_tracker.current_perclos > 20 else "ALTO",
                 }
+                print(f"🚨 Enviando alerta: {alert_type} - PERCLOS: {self.state_tracker.current_perclos:.1f}%")
                 send_alert_async(alert_data)
 
             self.last_alarm_state = self.state_tracker.play_alarm
         else:
             self.state_tracker.reset_all()
             frame = cv2.flip(frame, 1)
+            metrics = {
+                "ear": 0.0,
+                "mar": 0.0,
+                "perclos": 0.0,
+                "yawn_time": 0.0,
+                "head_tilt_time": 0.0,
+                "head_pose": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+                "alert_text": None,
+                "tilt_type": None,
+                "is_alarm": False,
+            }
 
-        return frame, self.state_tracker.play_alarm
+        return frame, self.state_tracker.play_alarm, metrics
 
     def _plot_eye_landmarks(self, frame, left_lm_coordinates, right_lm_coordinates):
         """Plot eye landmarks on the frame."""

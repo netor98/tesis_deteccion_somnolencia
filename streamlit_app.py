@@ -51,86 +51,19 @@ with st.sidebar:
         key="api_url_input"
     )
 
-    # Camera Configuration (for Raspberry Pi)
-    st.subheader("Configuración de Cámara")
+    # Detection Thresholds Configuration
+    st.subheader("Umbrales de Detección")
 
-    # Camera mode selection
-    camera_mode = st.radio(
-        "Modo de cámara",
-        ["OpenCV (Recomendado para SSH)", "WebRTC (Navegador)"],
-        help="OpenCV accede directamente a la cámara del servidor. WebRTC usa la cámara del navegador.",
-        index=0,  # Default to OpenCV
-        key="camera_mode_radio"
+    perclos_thresh = st.slider(
+        "Umbral PERCLOS (%)",
+        min_value=10.0,
+        max_value=70.0,
+        value=st.session_state.get("perclos_thresh", DEFAULT_THRESHOLDS["PERCLOS_THRESH"]),
+        step=1.0,
+        help="Porcentaje de tiempo con ojos cerrados que activa la alarma. Valores más bajos = más sensible. Ajusta según tu rostro.",
+        key="perclos_thresh_slider"
     )
-
-    # Save camera mode to session state
-    st.session_state["camera_mode"] = camera_mode
-
-    # Camera device selection for OpenCV
-    if camera_mode == "OpenCV (Recomendado para SSH)":
-        camera_index = st.number_input(
-            "Índice de cámara",
-            min_value=0,
-            max_value=10,
-            value=st.session_state.get("camera_index", 0),
-            help="Índice de la cámara (0 para /dev/video0, 1 para /dev/video1, etc.)",
-            key="camera_index_input"
-        )
-        st.session_state["camera_index"] = camera_index
-
-        # Performance settings for Raspberry Pi
-        import platform
-        is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
-
-        if is_raspberry:
-            st.info("🍓 **Raspberry Pi detectada** - Configuración optimizada activada")
-
-            # FPS setting (lower for Raspberry Pi)
-            target_fps = st.slider(
-                "FPS objetivo",
-                min_value=5,
-                max_value=30,
-                value=st.session_state.get("target_fps", 15),
-                help="FPS más bajos mejoran el rendimiento en Raspberry Pi. Recomendado: 10-15 FPS",
-                key="target_fps_slider"
-            )
-            st.session_state["target_fps"] = target_fps
-            st.session_state["frame_delay"] = 1.0 / target_fps
-
-            # Resolution setting
-            resolution = st.selectbox(
-                "Resolución de video",
-                ["640x480", "320x240"],
-                index=0 if st.session_state.get("video_resolution", "640x480") == "640x480" else 1,
-                help="Resolución más baja mejora el rendimiento",
-                key="video_resolution_select"
-            )
-            st.session_state["video_resolution"] = resolution
-        else:
-            # Default settings for more powerful machines
-            st.session_state["target_fps"] = st.session_state.get("target_fps", 30)
-            st.session_state["frame_delay"] = 1.0 / st.session_state["target_fps"]
-            st.session_state["video_resolution"] = st.session_state.get("video_resolution", "640x480")
-
-        # Auto-refresh toggle (allows user to disable auto-refresh for scrolling)
-        auto_refresh = st.checkbox(
-            "Auto-refresh (actualización automática)",
-            value=st.session_state.get("auto_refresh", True),
-            help="Desactiva esto si quieres poder hacer scroll en la página. Usa el botón 'Actualizar Frame' para actualizar manualmente.",
-            key="auto_refresh_checkbox"
-        )
-        st.session_state["auto_refresh"] = auto_refresh
-
-    camera_info = st.info("💡 Si tienes problemas con la cámara, verifica los permisos y la conexión")
-
-    # Check if running on Raspberry Pi
-    import platform
-    is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
-
-    if is_raspberry:
-        st.warning("⚠️ Detectado: Raspberry Pi")
-        st.info("En Raspberry Pi, asegúrate de que la cámara esté habilitada:")
-        st.code("sudo raspi-config  # Enable camera interface", language="bash")
+    st.session_state["perclos_thresh"] = perclos_thresh
 
     # Update API client when URL changes
     if api_url_input != st.session_state.get("api_url"):
@@ -156,17 +89,17 @@ with st.sidebar:
     api_connected = st.session_state["api_connected"]
 
     if api_connected:
-        st.success(f"✅ Conectado a la API")
+        st.success(f"Conectado a la API")
         st.caption(f"URL: {st.session_state['api_url']}")
     else:
-        st.error(f"❌ No se puede conectar a la API")
+        st.error(f"No se puede conectar a la API")
         st.caption(f"URL intentada: {st.session_state['api_url']}")
-        st.info("💡 Verifica que:")
-        st.info("• El servidor backend esté ejecutándose")
-        st.info("• La URL sea correcta (ej: http://IP:8000)")
-        st.info("• No haya firewall bloqueando la conexión")
+        st.info("Verifica que:")
+        st.info("- El servidor backend esté ejecutándose")
+        st.info("- La URL sea correcta (ej: http://IP:8000)")
+        st.info("- No haya firewall bloqueando la conexión")
 
-        if st.button("🔄 Reintentar Conexión", use_container_width=False):
+        if st.button("Reintentar Conexión", use_container_width=False):
             st.session_state["api_connected"] = None
             st.rerun()
 
@@ -215,7 +148,7 @@ with st.sidebar:
                     viaje_id = active_trip.get("id_viaje")
                     st.session_state["viaje_id"] = viaje_id
                     st.session_state["conductor_id"] = conductor_id
-                    st.success(f"✅ Viaje activo encontrado: #{viaje_id}")
+                    st.success(f"Viaje activo encontrado: #{viaje_id}")
                 st.session_state["auto_detect_attempted"] = True
             except Exception as e:
                 st.session_state["auto_detect_attempted"] = True
@@ -223,7 +156,7 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔍 Buscar Viaje Activo", use_container_width=False):
+        if st.button("Buscar Viaje Activo", use_container_width=False):
             if api_connected:
                 try:
                     with st.spinner("Buscando viaje activo..."):
@@ -233,54 +166,58 @@ with st.sidebar:
                             st.session_state["viaje_id"] = viaje_id
                             st.session_state["conductor_id"] = conductor_id
                             st.session_state["auto_detect_attempted"] = True
-                            st.success(f"✅ Conectado al viaje #{viaje_id}")
+                            st.success(f"Conectado al viaje #{viaje_id}")
                             st.rerun()
                         else:
-                            st.warning("⚠️ No hay un viaje activo para este conductor.")
-                            st.info("💡 El administrador debe iniciar un viaje primero desde el panel de administración.")
+                            st.warning("No hay un viaje activo para este conductor.")
+                            st.info("El administrador debe iniciar un viaje primero desde el panel de administración.")
                             st.session_state["viaje_id"] = None
                             st.session_state["auto_detect_attempted"] = True
                 except Exception as e:
-                    st.error(f"❌ Error al conectar: {str(e)}")
+                    st.error(f"Error al conectar: {str(e)}")
                     st.session_state["viaje_id"] = None
             else:
-                st.error("❌ No hay conexión con la API")
-                st.info("💡 Configura la URL del backend y verifica la conexión antes de buscar viajes.")
+                st.error("No hay conexión con la API")
+                st.info("Configura la URL del backend y verifica la conexión antes de buscar viajes.")
 
     with col2:
-        if st.button("📋 Ver Todos los Activos", use_container_width=False):
+        if st.button("Ver Todos los Activos", use_container_width=False):
             if api_connected:
                 try:
                     active_trips = api_client.get_all_active_trips()
                     if active_trips:
-                        st.info(f"📊 Se encontraron {len(active_trips)} viaje(s) activo(s):")
+                        st.info(f"Se encontraron {len(active_trips)} viaje(s) activo(s):")
                         for trip in active_trips:
                             trip_id = trip.get("id_viaje")
                             trip_conductor = trip.get("id_conductor")
-                            st.text(f"  • Viaje #{trip_id} - Conductor ID: {trip_conductor}")
+                            st.text(f"  - Viaje #{trip_id} - Conductor ID: {trip_conductor}")
                     else:
-                        st.warning("⚠️ No hay viajes activos en el sistema")
+                        st.warning("No hay viajes activos en el sistema")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"Error: {str(e)}")
             else:
-                st.error("❌ No hay conexión con la API")
+                st.error("No hay conexión con la API")
 
     # Show current connection status
     st.divider()
     if st.session_state.get("viaje_id"):
-        st.success(f"🔗 Conectado al viaje #{st.session_state['viaje_id']}")
-        st.info(f"👤 Conductor ID: {st.session_state.get('conductor_id', 'N/A')}")
-        if st.button("🔌 Desconectar", use_container_width=False):
+        st.success(f"Conectado al viaje #{st.session_state['viaje_id']}")
+        st.info(f"Conductor ID: {st.session_state.get('conductor_id', 'N/A')}")
+        if st.button("Desconectar", use_container_width=False):
             st.session_state["viaje_id"] = None
             st.session_state["last_viaje_id"] = None
             st.session_state["auto_detect_attempted"] = False
             st.rerun()
     else:
-        st.warning("⚠️ No conectado a ningún viaje")
-        st.info("💡 Use 'Buscar Viaje Activo' para conectarse automáticamente")
+        st.warning("No conectado a ningún viaje")
+        st.info("Use 'Buscar Viaje Activo' para conectarse automáticamente")
 
 # Use default thresholds from config
 thresholds = DEFAULT_THRESHOLDS.copy()
+
+# Apply user-configured PERCLOS threshold from sidebar
+if "perclos_thresh" in st.session_state:
+    thresholds["PERCLOS_THRESH"] = st.session_state["perclos_thresh"]
 
 # Get viaje_id from session state
 viaje_id = st.session_state.get("viaje_id")
@@ -300,7 +237,7 @@ if "video_handler" not in st.session_state or st.session_state.get("last_viaje_i
 # Get handlers with error checking
 video_handler = st.session_state.get("video_handler")
 if video_handler is None:
-    st.error("⚠️ El procesador de video no está inicializado")
+    st.error("El procesador de video no está inicializado")
     st.stop()
 
 try:
@@ -309,8 +246,29 @@ except Exception as e:
     st.error(f"Error al inicializar el procesador de audio: {e}")
     st.stop()
 
-lock = threading.Lock()  # For thread-safe access & to prevent race-condition.
-shared_state = {"play_alarm": False}
+# Use session_state for shared_state to persist across reruns
+if "shared_state" not in st.session_state:
+    st.session_state["shared_state"] = {
+        "play_alarm": False,
+        "metrics": {
+            "ear": 0.0,
+            "mar": 0.0,
+            "perclos": 0.0,
+            "yawn_time": 0.0,
+            "head_tilt_time": 0.0,
+            "head_pose": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+            "alert_text": None,
+            "tilt_type": None,
+            "is_alarm": False,
+        }
+    }
+
+if "lock" not in st.session_state:
+    st.session_state["lock"] = threading.Lock()
+
+# Get references for use in callbacks
+shared_state = st.session_state["shared_state"]
+lock = st.session_state["lock"]
 
 
 def video_frame_callback(frame: av.VideoFrame):
@@ -325,12 +283,13 @@ def video_frame_callback(frame: av.VideoFrame):
 
         # Process frame with error handling and timeout protection
         try:
-            processed_frame, play_alarm = video_handler.process(frame_array, thresholds)
+            processed_frame, play_alarm, metrics = video_handler.process(frame_array, thresholds)
 
             # Validate processed frame
             if processed_frame is None or processed_frame.size == 0:
                 processed_frame = frame_array
                 play_alarm = False
+                metrics = shared_state["metrics"]
 
         except Exception as e:
             # If processing fails, return original frame
@@ -339,10 +298,12 @@ def video_frame_callback(frame: av.VideoFrame):
             print(traceback.format_exc())
             processed_frame = frame_array
             play_alarm = False
+            metrics = shared_state["metrics"]
 
         # Update shared state
         with lock:
             shared_state["play_alarm"] = play_alarm
+            shared_state["metrics"] = metrics
 
         # Return processed frame
         return av.VideoFrame.from_ndarray(processed_frame, format="bgr24")
@@ -366,185 +327,35 @@ def audio_frame_callback(frame: av.AudioFrame):
         print(f"Error in audio_frame_callback: {e}")
         return frame
 
-st.header("📹 Detección de Somnolencia")
+st.header("Detección de Somnolencia")
 
 # Check if we have a trip connection
 if not st.session_state.get("viaje_id"):
-    st.warning("⚠️ Debes conectarte a un viaje activo antes de iniciar la detección")
-    st.info("💡 Usa el botón 'Buscar Viaje Activo' en la barra lateral")
+    st.warning("Debes conectarte a un viaje activo antes de iniciar la detección")
+    st.info("Usa el botón 'Buscar Viaje Activo' en la barra lateral")
 else:
-    st.info(f"✅ Conectado al viaje #{st.session_state.get('viaje_id')} - La detección está activa")
+    st.info(f"Conectado al viaje #{st.session_state.get('viaje_id')} - La detección está activa")
 
-    # Get camera mode from session state (set in sidebar)
-    camera_mode = st.session_state.get("camera_mode", "OpenCV (Recomendado para SSH)")
-    camera_index = st.session_state.get("camera_index", 0)
+    # WebRTC mode - Browser camera access
+    with st.expander("Instrucciones para acceder a la cámara"):
+        st.markdown("""
+        **Para usar la cámara en tu navegador:**
 
-    if camera_mode == "OpenCV (Recomendado para SSH)":
-        # OpenCV mode - Direct camera access from server
-        st.subheader("Modo OpenCV - Acceso directo a la cámara del servidor")
+        1. **Permisos del navegador**: Cuando se cargue el video, el navegador te pedirá permiso para acceder a la cámara. Debes aceptar.
 
-        # Initialize camera capture in session state
-        if "camera_capture" not in st.session_state:
-            st.session_state["camera_capture"] = None
-            st.session_state["detection_running"] = False
+        2. **Si el error persiste**:
+           - Verifica que la cámara esté conectada y funcionando
+           - Prueba con otro navegador (Chrome, Firefox)
+           - Asegúrate de que el navegador tenga permisos de cámara
+        """)
 
-        # Control buttons
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("▶️ Iniciar Detección", disabled=st.session_state.get("detection_running", False)):
-                try:
-                    # Try to open camera
-                    cap = cv2.VideoCapture(camera_index)
-                    if not cap.isOpened():
-                        st.error(f"❌ No se pudo abrir la cámara {camera_index}")
-                        st.info("💡 Verifica que la cámara esté conectada y que tengas permisos")
-                    else:
-                        # Set camera resolution if specified
-                        resolution = st.session_state.get("video_resolution", "640x480")
-                        if resolution == "640x480":
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                        elif resolution == "320x240":
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    st.info("**Instrucciones**: Haz clic en el botón 'Start' debajo para iniciar la detección")
 
-                        st.session_state["camera_capture"] = cap
-                        st.session_state["detection_running"] = True
-                        st.session_state["frame_count"] = 0
-                        st.success("✅ Cámara iniciada correctamente")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error al abrir la cámara: {e}")
+    # Create two columns: video on left, metrics on right
+    webrtc_video_col, webrtc_metrics_col = st.columns([2, 1])
 
-        with col2:
-            if st.button("⏹️ Detener Detección", disabled=not st.session_state.get("detection_running", False)):
-                if st.session_state.get("camera_capture") is not None:
-                    st.session_state["camera_capture"].release()
-                    st.session_state["camera_capture"] = None
-                st.session_state["detection_running"] = False
-                st.session_state["frame_count"] = 0
-                st.info("⏸️ Detección detenida")
-                st.rerun()
-
-        with col3:
-            # Manual refresh button (allows user to control updates)
-            if st.button("🔄 Actualizar Frame", disabled=not st.session_state.get("detection_running", False)):
-                st.rerun()
-
-        # Video display and processing
-        if st.session_state.get("detection_running", False) and st.session_state.get("camera_capture") is not None:
-            cap = st.session_state["camera_capture"]
-
-            # Create placeholder for video
-            video_placeholder = st.empty()
-
-            # Status indicator
-            status_placeholder = st.empty()
-
-            # Process single frame per execution (allows user interaction)
-            try:
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    status_placeholder.error("❌ No se pudo leer el frame de la cámara")
-                    # Stop detection if camera fails
-                    cap.release()
-                    st.session_state["camera_capture"] = None
-                    st.session_state["detection_running"] = False
-                else:
-                    # Process frame
-                    try:
-                        processed_frame, play_alarm = video_handler.process(frame, thresholds)
-
-                        # Update shared state for audio
-                        with lock:
-                            shared_state["play_alarm"] = play_alarm
-
-                        # Convert BGR to RGB for display
-                        display_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-
-                        # Display frame
-                        video_placeholder.image(display_frame, channels="RGB", width='stretch')
-
-                        # Update status (only show occasionally to reduce updates)
-                        if "frame_count" not in st.session_state:
-                            st.session_state["frame_count"] = 0
-                        st.session_state["frame_count"] += 1
-
-                        if st.session_state["frame_count"] % 30 == 0:  # Update status every 30 frames
-                            status_placeholder.info(f"✅ Detección activa - Frame {st.session_state['frame_count']}")
-
-                        # Play alarm if needed (simple beep for now)
-                        if play_alarm:
-                            # Audio will be handled separately if needed
-                            pass
-
-                    except Exception as e:
-                        import traceback
-                        status_placeholder.error(f"Error procesando frame: {e}")
-                        print(traceback.format_exc())
-                        # Show original frame on error
-                        display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        video_placeholder.image(display_frame, channels="RGB", width='stretch')
-
-                    # Auto-refresh option (can be disabled to allow scrolling)
-                    auto_refresh = st.session_state.get("auto_refresh", True)
-
-                    # Rerun only if detection is still running and auto-refresh is enabled
-                    # This allows user to scroll when auto-refresh is disabled
-                    if st.session_state.get("detection_running", False) and auto_refresh:
-                        # Use configurable frame delay (optimized for Raspberry Pi)
-                        frame_delay = st.session_state.get("frame_delay", 0.03)  # Default ~30 FPS
-                        time.sleep(frame_delay)
-                        st.rerun()
-                    elif st.session_state.get("detection_running", False) and not auto_refresh:
-                        # Show message that user can manually refresh (only once)
-                        if "manual_refresh_shown" not in st.session_state:
-                            status_placeholder.info("💡 Auto-refresh desactivado. Usa el botón 'Actualizar Frame' para ver el siguiente frame, o activa 'Auto-refresh' para actualización automática")
-                            st.session_state["manual_refresh_shown"] = True
-
-            except Exception as e:
-                status_placeholder.error(f"❌ Error en el loop de detección: {e}")
-                import traceback
-                print(traceback.format_exc())
-                # Cleanup on error
-                if st.session_state.get("camera_capture") is not None:
-                    st.session_state["camera_capture"].release()
-                    st.session_state["camera_capture"] = None
-                st.session_state["detection_running"] = False
-        else:
-            st.info("💡 Haz clic en 'Iniciar Detección' para comenzar")
-
-    else:
-        # WebRTC mode - Browser camera access
-        st.subheader("Modo WebRTC - Cámara del navegador")
-
-        with st.expander("ℹ️ Instrucciones para acceder a la cámara"):
-            st.markdown("""
-            **Para usar la cámara en tu navegador:**
-
-            1. **Permisos del navegador**: Cuando se cargue el video, el navegador te pedirá permiso para acceder a la cámara. Debes aceptar.
-
-            2. **En Raspberry Pi**:
-               - Si accedes desde otra máquina: El navegador usará la cámara de esa máquina
-               - Si accedes localmente: El navegador usará la cámara de la Raspberry Pi (si está disponible)
-
-            3. **Verificar cámara disponible**:
-               ```bash
-               # En Raspberry Pi, verifica dispositivos de video:
-               v4l2-ctl --list-devices
-               ls -l /dev/video*
-               ```
-
-            4. **Si el error persiste**:
-               - Verifica que la cámara esté conectada y funcionando
-               - Prueba con otro navegador (Chrome, Firefox)
-               - Verifica que la URL sea `http://` o `https://` (no `file://`)
-               - Asegúrate de que el navegador tenga permisos de cámara
-            """)
-
-        st.info("💡 **Instrucciones**: Haz clic en el botón 'Start' debajo para iniciar la detección")
-        st.info("⚠️ **Importante**: Acepta el permiso de cámara cuando el navegador lo solicite")
-
+    ctx = None  # Initialize ctx outside try block
+    with webrtc_video_col:
         try:
             ctx = webrtc_streamer(
                 key="drowsiness-detection",
@@ -571,46 +382,70 @@ else:
             if ctx:
                 if hasattr(ctx, 'state'):
                     if ctx.state.playing:
-                        st.success("✅ Cámara activa - Detección en curso")
+                        st.success("Cámara activa - Detección en curso")
                     elif ctx.state.playing is False:
-                        st.info("⏸️ Cámara pausada - Haz clic en 'Start' para iniciar")
+                        st.info("Cámara pausada - Haz clic en 'Start' para iniciar")
                     else:
-                        st.warning("⚠️ Esperando acceso a la cámara...")
-                        st.info("💡 Acepta el permiso de cámara cuando el navegador lo solicite")
+                        st.warning("Esperando acceso a la cámara...")
                 else:
-                    st.info("💡 Haz clic en 'Start' para iniciar la detección")
+                    st.info("Haz clic en 'Start' para iniciar la detección")
             else:
-                st.warning("⚠️ Componente de video no inicializado")
+                st.warning("Componente de video no inicializado")
 
         except Exception as e:
             error_msg = str(e)
-            st.error(f"❌ Error al acceder a la cámara: {error_msg}")
+            st.error(f"Error al acceder a la cámara: {error_msg}")
 
-            if "NotFoundError" in error_msg or "device not found" in error_msg.lower():
-                st.error("**Problema**: No se encontró ningún dispositivo de cámara")
-                st.markdown("""
-                **Soluciones:**
+    with webrtc_metrics_col:
+        st.subheader("Métricas en Tiempo Real")
 
-                1. **Verifica que la cámara esté conectada**:
-                   - En Raspberry Pi: `lsusb` o `v4l2-ctl --list-devices`
-                   - Verifica que aparezca `/dev/video0` o similar
+        # Get metrics from shared state
+        with lock:
+            metrics = shared_state.get("metrics", {})
 
-                2. **Permisos del navegador**:
-                   - Asegúrate de que el navegador tenga permisos para acceder a la cámara
-                   - Verifica la configuración de privacidad del navegador
+        head_pose = metrics.get("head_pose", {"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
 
-                3. **Acceso HTTPS/HTTP**:
-                   - Algunos navegadores requieren HTTPS para acceder a la cámara
-                   - Prueba accediendo con `https://` si es posible
-                   - O usa `http://localhost` en lugar de la IP
+        # Create metrics dataframe
+        metrics_data = {
+            "Métrica": [
+                "EAR (Apertura Ojos)",
+                "MAR (Apertura Boca)",
+                "PERCLOS",
+                "Tiempo Bostezo",
+                "Tiempo Inclinación",
+                "Roll (Inclinación)",
+                "Pitch (Cabeceo)",
+                "Yaw (Giro)"
+            ],
+            "Valor": [
+                f"{metrics.get('ear', 0):.3f}",
+                f"{metrics.get('mar', 0):.3f}",
+                f"{metrics.get('perclos', 0):.1f}%",
+                f"{metrics.get('yawn_time', 0):.2f} seg",
+                f"{metrics.get('head_tilt_time', 0):.2f} seg",
+                f"{head_pose.get('roll', 0):.1f}°",
+                f"{head_pose.get('pitch', 0):.1f}°",
+                f"{head_pose.get('yaw', 0):.1f}°"
+            ]
+        }
 
-                4. **Reinicia la aplicación**:
-                   ```bash
-                   # Detén Streamlit (Ctrl+C) y reinicia:
-                   streamlit run streamlit_app.py
-                   ```
-                """)
-            else:
-                st.error(f"Error desconocido: {error_msg}")
-                st.info("💡 Intenta recargar la página o reiniciar la aplicación")
+        st.table(metrics_data)
+
+        # Show alert if any
+        alert_text = metrics.get("alert_text")
+        if alert_text:
+            st.error(f"{alert_text}")
+        elif metrics.get("is_alarm"):
+            st.warning("Alerta de somnolencia activa")
+        else:
+            st.success("Estado normal")
+
+    # Auto-refresh for WebRTC metrics when streaming is active
+    try:
+        if ctx and hasattr(ctx, 'state') and ctx.state.playing:
+            time.sleep(0.3)  # Update metrics every 300ms
+            st.rerun()
+    except Exception:
+        # Ignore errors during shutdown
+        pass
 
