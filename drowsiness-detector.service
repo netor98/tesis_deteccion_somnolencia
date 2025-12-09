@@ -1,0 +1,35 @@
+[Unit]
+Description=Driver Drowsiness Detection System
+After=network-online.target
+Wants=network-online.target
+# Wait for network to be fully available before starting
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/drowsiness
+Environment="RISK_ADVISOR_API_URL=http://192.168.100.82:8000"
+Environment="PYTHONUNBUFFERED=1"
+
+# Wait 30 seconds after boot to ensure all hardware is ready
+ExecStartPre=/bin/sleep 30
+
+# Run the auto-start detector
+ExecStart=/home/pi/drowsiness/env/bin/python3 /home/pi/drowsiness/auto_start.py --api-url http://192.168.100.82:8000
+
+# Restart configuration
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=drowsiness-detector
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

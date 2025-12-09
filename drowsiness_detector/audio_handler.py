@@ -112,3 +112,62 @@ class AudioFrameHandler:
 
         return new_frame
 
+
+def play_alarm_sound(sound_file_path: str, duration: float = 2.0):
+    """Play alarm sound directly (for standalone mode without WebRTC).
+
+    Args:
+        sound_file_path: Path to the alarm WAV file
+        duration: Duration to play the sound in seconds
+    """
+    try:
+        import subprocess
+        import platform
+
+        system = platform.system()
+
+        if system == "Linux":
+            # Try multiple players in order of preference
+            players = ["aplay", "paplay", "ffplay"]
+
+            for player in players:
+                try:
+                    if player == "ffplay":
+                        # ffplay from ffmpeg
+                        subprocess.run(
+                            [player, "-nodisp", "-autoexit", "-t", str(duration), sound_file_path],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=duration + 1
+                        )
+                    else:
+                        # aplay or paplay
+                        subprocess.run(
+                            [player, sound_file_path],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=duration + 1
+                        )
+                    return  # Success
+                except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+
+            # If no player worked, print warning
+            print(f"⚠️  No audio player found (tried: {', '.join(players)})")
+
+        elif system == "Darwin":  # macOS
+            subprocess.run(
+                ["afplay", sound_file_path],
+                timeout=duration + 1
+            )
+        elif system == "Windows":
+            import winsound
+            winsound.PlaySound(sound_file_path, winsound.SND_FILENAME)
+        else:
+            print(f"⚠️  Audio playback not supported on {system}")
+
+    except Exception as e:
+        print(f"⚠️  Error playing alarm sound: {e}")
+

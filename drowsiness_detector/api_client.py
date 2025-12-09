@@ -28,6 +28,14 @@ class APIClient:
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
 
+    def set_base_url(self, base_url: str):
+        """Set the base URL for the API client.
+
+        Args:
+            base_url: New base URL for the API
+        """
+        self.base_url = base_url
+
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Optional[Dict]:
         """Make an HTTP request to the API.
 

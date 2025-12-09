@@ -1,0 +1,12 @@
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://192.168.100.82:8501
+
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1765315114.380747   18103 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1765315114.391700   18164 gl_context.cc:369] GL version: 3.2 (OpenGL ES 3.2 Mesa 24.2.8-1ubuntu1~24.04.1), renderer: AMD Radeon Vega 10 Graphics (radeonsi, raven, LLVM 19.1.1, DRM 3.61, 6.14.0-36-generic)
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+W0000 00:00:1765315114.402997   18146 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1765315114.437605   18147 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.

@@ -319,11 +319,8 @@ class StateTracker:
         if self.current_perclos >= (self.perclos_threshold * 100.0):
             self.color = COLORS["RED"]
             self.play_alarm = True
-        else:
-            # Only reset alarm if no other conditions are met
-            if not (self.yawn_time > 0 or self.head_tilt_time > 0):
-                self.color = COLORS["GREEN"]
-                self.play_alarm = False
+        # Note: Don't reset alarm here - let the main process logic handle it
+        # to avoid conflicts with other detection conditions
 
     def update_yawn(self, condition_met, wait_time):
         """Update yawn state based on condition.
@@ -332,15 +329,23 @@ class StateTracker:
             condition_met: Boolean indicating if yawn condition is met
             wait_time: Time threshold before alarm triggers
         """
+        current_time = time.perf_counter()
+
         if condition_met:
-            end_time = time.perf_counter()
-            self.yawn_time += end_time - self.yawn_start_time
-            self.yawn_start_time = end_time
-            self.color = COLORS["RED"]
+            # If yawn just started, initialize start time
+            if self.yawn_time == 0.0:
+                self.yawn_start_time = current_time
+
+            # Calculate elapsed time
+            self.yawn_time = current_time - self.yawn_start_time
+
+            # Activate alarm if threshold reached
             if self.yawn_time >= wait_time:
+                self.color = COLORS["RED"]
                 self.play_alarm = True
         else:
-            self.yawn_start_time = time.perf_counter()
+            # Reset when yawn stops
+            self.yawn_start_time = current_time
             self.yawn_time = 0.0
 
     def update_head_tilt(self, condition_met, wait_time):
@@ -400,6 +405,19 @@ class VideoFrameHandler:
         """Reset PERCLOS value and all detection state to initial values."""
         self.state_tracker.reset_all()
         self.last_alarm_state = False
+
+    def update_viaje_id(self, viaje_id: int, reset_state: bool = False):
+        """Update the viaje_id for this handler.
+
+        Args:
+            viaje_id: New trip ID to associate readings with
+            reset_state: If True, also reset all detection state
+        """
+        self.viaje_id = viaje_id
+        if reset_state:
+            self.reset_perclos()
+        # Reset reading timer to send reading immediately with new trip
+        self.last_reading_time = 0.0
 
     def process(self, frame: np.ndarray, thresholds: dict):
         """Process a video frame and detect drowsiness indicators.
@@ -514,15 +532,21 @@ class VideoFrameHandler:
                     else:
                         alert_text = "CABEZA INCLINADA!!!"
 
-            # Update color if no alerts
-            # PERCLOS is handled in update_perclos, so we only check yawn and head tilt here
-            if not (mar > mar_threshold or tilt_detected):
-                if not any([self.state_tracker.yawn_time > 0,
-                           self.state_tracker.head_tilt_time > 0]):
-                    # PERCLOS alarm is handled separately in update_perclos
-                    if self.state_tracker.current_perclos < (perclos_threshold * 100.0):
-                        self.state_tracker.color = COLORS["GREEN"]
-                        self.state_tracker.play_alarm = False
+            # Determine overall alarm state
+            # Alarm triggers if ANY condition is met
+            perclos_alarm = self.state_tracker.current_perclos >= (perclos_threshold * 100.0)
+            yawn_alarm = mar > mar_threshold and self.state_tracker.yawn_time >= thresholds.get("WAIT_TIME", 1.0)
+            tilt_alarm = tilt_detected and self.state_tracker.head_tilt_time >= thresholds.get("HEAD_TILT_WAIT_TIME", 3.0)
+
+            # Set play_alarm if any condition is met
+            if perclos_alarm or yawn_alarm or tilt_alarm:
+                self.state_tracker.play_alarm = True
+                self.state_tracker.color = COLORS["RED"]
+            else:
+                # Only reset alarm if ALL conditions are clear
+                if not (perclos_alarm or yawn_alarm or tilt_alarm):
+                    self.state_tracker.play_alarm = False
+                    self.state_tracker.color = COLORS["GREEN"]
 
             # Build metrics dictionary to return
             metrics = {
@@ -541,29 +565,52 @@ class VideoFrameHandler:
             if self.viaje_id and (current_time - self.last_reading_time) >= self.reading_interval:
                 reading_data = {
                     "id_viaje": self.viaje_id,
-                    "percios": self.state_tracker.current_perclos,  # Using PERCLOS as percios value
+                    "percios": round(self.state_tracker.current_perclos, 2),  # Using PERCLOS as percios value
                     "conteo_cabeceos": 1 if eyes_closed else 0,  # Current frame eye closure state
-                    "conteo_bostezos": 1 if mar > thresholds.get("MAR_THRESH", 0.6) else 0,
+                    "conteo_bostezos": 1 if (mar > thresholds.get("MAR_THRESH", 0.6)) else 0,
                 }
                 send_reading_async(reading_data)
                 self.last_reading_time = current_time
 
-            # Send alert when alarm state changes from False to True
-            if self.viaje_id and self.state_tracker.play_alarm and not self.last_alarm_state:
-                # Determine alert type based on what triggered it
-                alert_type = "SOMNOLENCIA_PERCLOS"
-                if self.state_tracker.yawn_time > 0 and self.state_tracker.yawn_time >= thresholds.get("WAIT_TIME", 1.0):
-                    alert_type = "SOMNOLENCIA_BOSTEZOS"
-                elif tilt_detected and self.state_tracker.head_tilt_time >= thresholds.get("HEAD_TILT_WAIT_TIME", 3.0):
-                    alert_type = "SOMNOLENCIA_CABECEOS"
+                # Debug info
+                print(f"📊 Lectura enviada - PERCLOS: {self.state_tracker.current_perclos:.1f}%, "
+                      f"EAR: {ear:.3f}, MAR: {mar:.3f}, Alarma: {self.state_tracker.play_alarm}")
 
-                alert_data = {
-                    "id_viaje": self.viaje_id,
-                    "tipo_alerta": alert_type,
-                    "nivel_somnolencia": "CRITICO" if self.state_tracker.current_perclos > 20 else "ALTO",
-                }
-                print(f"🚨 Enviando alerta: {alert_type} - PERCLOS: {self.state_tracker.current_perclos:.1f}%")
-                send_alert_async(alert_data)
+            # Send alert when alarm state changes from False to True OR when new alarm type detected
+            if self.viaje_id and self.state_tracker.play_alarm:
+                # Determine which specific alerts to send
+                should_send_alert = False
+                alert_type = None
+
+                # Check PERCLOS alarm
+                if perclos_alarm and not self.last_alarm_state:
+                    should_send_alert = True
+                    alert_type = "SOMNOLENCIA_PERCLOS"
+
+                # Check yawn alarm (prioritize over PERCLOS)
+                if yawn_alarm:
+                    # Send yawn alert if it just started (transition from 0 to >= wait_time)
+                    if not self.last_alarm_state or self.state_tracker.yawn_time >= thresholds.get("WAIT_TIME", 1.0):
+                        should_send_alert = True
+                        alert_type = "SOMNOLENCIA_BOSTEZOS"
+
+                # Check head tilt alarm (highest priority)
+                if tilt_alarm:
+                    # Send tilt alert if it just started
+                    if not self.last_alarm_state or self.state_tracker.head_tilt_time >= thresholds.get("HEAD_TILT_WAIT_TIME", 3.0):
+                        should_send_alert = True
+                        alert_type = "SOMNOLENCIA_CABECEOS"
+
+                # Send the alert
+                if should_send_alert and alert_type:
+                    alert_data = {
+                        "id_viaje": self.viaje_id,
+                        "tipo_alerta": alert_type,
+                        "nivel_somnolencia": "CRITICO" if self.state_tracker.current_perclos > 20 else "ALTO",
+                    }
+                    print(f"🚨 Enviando alerta: {alert_type} - PERCLOS: {self.state_tracker.current_perclos:.1f}%, "
+                          f"Yawn: {self.state_tracker.yawn_time:.1f}s, Tilt: {self.state_tracker.head_tilt_time:.1f}s")
+                    send_alert_async(alert_data)
 
             self.last_alarm_state = self.state_tracker.play_alarm
         else:

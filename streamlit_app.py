@@ -222,12 +222,13 @@ if "perclos_thresh" in st.session_state:
 # Get viaje_id from session state
 viaje_id = st.session_state.get("viaje_id")
 
-# Initialize handlers (video_handler will be recreated if viaje_id changes)
+# Initialize handlers (create once, update viaje_id as needed)
 # Detect if running on Raspberry Pi for optimization
 import platform
 is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
 
-if "video_handler" not in st.session_state or st.session_state.get("last_viaje_id") != viaje_id:
+# Create video handler only once when first needed
+if "video_handler" not in st.session_state:
     st.session_state["video_handler"] = VideoFrameHandler(
         viaje_id=viaje_id,
         use_raspberry_pi_optimization=is_raspberry
@@ -240,10 +241,23 @@ if video_handler is None:
     st.error("El procesador de video no está inicializado")
     st.stop()
 
-try:
-    audio_handler = AudioFrameHandler(sound_file_path=alarm_file_path)
-except Exception as e:
-    st.error(f"Error al inicializar el procesador de audio: {e}")
+# Update viaje_id if it changed (without recreating the handler)
+if st.session_state.get("last_viaje_id") != viaje_id:
+    video_handler.update_viaje_id(viaje_id, reset_state=False)
+    st.session_state["last_viaje_id"] = viaje_id
+    print(f"Updated video_handler with new viaje_id: {viaje_id}")
+
+# Initialize audio handler (create once)
+if "audio_handler" not in st.session_state:
+    try:
+        st.session_state["audio_handler"] = AudioFrameHandler(sound_file_path=alarm_file_path)
+    except Exception as e:
+        st.error(f"Error al inicializar el procesador de audio: {e}")
+        st.stop()
+
+audio_handler = st.session_state.get("audio_handler")
+if audio_handler is None:
+    st.error("El procesador de audio no está inicializado")
     st.stop()
 
 # Use session_state for shared_state to persist across reruns
