@@ -34,23 +34,29 @@ from drowsiness_detector.audio_handler import play_alarm_sound
 class AutoDetector:
     """Automatic drowsiness detector - same logic as Streamlit but without web UI."""
 
-    def __init__(self, conductor_id=None, api_url=None, camera_index=0):
+    def __init__(self, conductor_id=None, api_url=None, camera_index=0, offline_mode=False):
         """Initialize the auto detector.
 
         Args:
             conductor_id: ID of the conductor (if None, will fetch from API)
             api_url: Backend API URL
             camera_index: Camera device index (default: 0)
+            offline_mode: If True, skip API connection and work offline
         """
-        self.conductor_id = conductor_id
+        self.conductor_id = conductor_id or 1  # Default conductor ID for offline mode
         self.camera_index = camera_index
         self.running = False
-        self.viaje_id = None
+        self.viaje_id = 999  # Default trip ID for offline mode
+        self.offline_mode = offline_mode
 
-        # Setup API client (same as Streamlit)
-        self.api_client = get_api_client()
-        if api_url:
-            self.api_client.set_base_url(api_url)
+        # Setup API client (same as Streamlit) - only if not offline
+        if not self.offline_mode:
+            self.api_client = get_api_client()
+            if api_url:
+                self.api_client.set_base_url(api_url)
+        else:
+            self.api_client = None
+            print("🔌 Modo OFFLINE activado - Sin conexión al backend")
 
         # Initialize video handler (will be set after getting viaje_id)
         self.video_handler = None
@@ -92,16 +98,16 @@ class AutoDetector:
 
         # Lock for thread-safe access to shared_state
         self.lock = threading.Lock()
-        
+
         # Alarm state
         self.alarm_playing = False
         self.alarm_thread = None
         self.alarm_stop_event = threading.Event()  # Event to stop alarm loop
-        
+
         # Detect if Raspberry Pi for optimization
         import platform
         self.is_raspberry = "arm" in platform.machine().lower() or "raspberry" in platform.uname().release.lower()
-    
+
     def wait_for_api_connection(self, max_retries=60, retry_interval=5):
         """Wait for API connection to be established.
 
@@ -112,6 +118,11 @@ class AutoDetector:
         Returns:
             bool: True if connected, False otherwise
         """
+        # Skip API connection in offline mode
+        if self.offline_mode:
+            print("🔌 Modo OFFLINE - Saltando conexión a API")
+            return True
+
         print(f"🔌 Esperando conexión con API: {self.api_client.base_url}")
 
         for attempt in range(1, max_retries + 1):
@@ -134,6 +145,12 @@ class AutoDetector:
         Returns:
             dict: Trip data or None
         """
+        # In offline mode, use mock trip data
+        if self.offline_mode:
+            print(f"🔍 Modo OFFLINE - Usando viaje simulado para conductor ID: {self.conductor_id}")
+            self.viaje_id = 999  # Mock trip ID
+            return {"id_viaje": 999, "conductor_id": self.conductor_id}
+
         print(f"🔍 Buscando viaje activo para conductor ID: {self.conductor_id}")
 
         while self.running:
@@ -170,15 +187,18 @@ class AutoDetector:
         """Setup video frame handler with trip ID - SAME as Streamlit."""
         print("🎥 Inicializando procesador de video...")
 
+        # In offline mode, don't pass viaje_id to avoid API calls
+        viaje_id_for_handler = None if self.offline_mode else self.viaje_id
+
         # Create video handler only once (same as Streamlit optimization)
         if self.video_handler is None:
             self.video_handler = VideoFrameHandler(
-                viaje_id=self.viaje_id,
+                viaje_id=viaje_id_for_handler,
                 use_raspberry_pi_optimization=self.is_raspberry
             )
         else:
             # Update viaje_id without recreating handler (same as Streamlit fix)
-            self.video_handler.update_viaje_id(self.viaje_id, reset_state=False)
+            self.video_handler.update_viaje_id(viaje_id_for_handler, reset_state=False)
 
         print("✅ Procesador de video inicializado")
 
@@ -232,31 +252,34 @@ class AutoDetector:
             self.alarm_playing = True
             self.alarm_stop_event.clear()
 
+            # Execute relay script when alarm starts
+            self.execute_relay_script()
+
             # Play alarm sound continuously in separate thread
             if self.audio_handler:
                 def play_alarm_loop():
                     """Play alarm sound continuously until stopped."""
                     alarm_path = str(project_dir / "audio" / "wake_up.wav")
                     print("🔊 Iniciando reproducción continua de alarma...")
-                    
+
                     while not self.alarm_stop_event.is_set():
                         try:
                             # Play alarm sound (duration ~2 seconds)
                             play_alarm_sound(alarm_path, duration=2.0)
-                            
+
                             # Small pause before repeating (0.5 seconds)
                             # Total cycle: ~2.5 seconds per loop
                             if not self.alarm_stop_event.wait(0.5):
                                 continue
                             else:
                                 break
-                                
+
                         except Exception as e:
                             print(f"⚠️  Error reproduciendo alarma: {e}")
                             # Wait before retrying
                             if self.alarm_stop_event.wait(1.0):
                                 break
-                    
+
                     print("🔇 Alarma detenida")
 
                 # Start alarm thread
@@ -268,38 +291,64 @@ class AutoDetector:
             print("✅ Estado normal - Desactivando alarma")
             self.alarm_playing = False
             self.alarm_stop_event.set()  # Signal the alarm thread to stop
-            
+
             # Wait briefly for thread to finish
             if self.alarm_thread and self.alarm_thread.is_alive():
                 self.alarm_thread.join(timeout=1.0)
+
+    def execute_relay_script(self):
+        """Execute the relay script when alarm is triggered."""
+        relay_script_path = "/home/dell/relay.py"
+
+        try:
+            print(f"⚡ Ejecutando script de relay: {relay_script_path}")
+            # Execute the relay script in background (non-blocking)
+            subprocess.Popen(
+                ["python", relay_script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            print("✅ Script de relay ejecutado")
+        except FileNotFoundError:
+            print(f"⚠️  Warning: Script de relay no encontrado en {relay_script_path}")
+        except Exception as e:
+            print(f"⚠️  Error ejecutando script de relay: {e}")
 
     def run(self):
         """Main detection loop."""
         self.running = True
 
         print("=" * 60)
-        print("🚗 DETECTOR DE SOMNOLENCIA - MODO AUTOMÁTICO")
+        if self.offline_mode:
+            print("🚗 DETECTOR DE SOMNOLENCIA - MODO OFFLINE")
+        else:
+            print("🚗 DETECTOR DE SOMNOLENCIA - MODO AUTOMÁTICO")
         print("=" * 60)
 
         try:
-            # Step 1: Wait for API connection
+            # Step 1: Wait for API connection (skip in offline mode)
             if not self.wait_for_api_connection():
                 print("❌ No se puede ejecutar sin conexión a la API")
                 return
 
-            # Step 2: Get conductor ID if not provided
-            if self.conductor_id is None:
+            # Step 2: Get conductor ID if not provided (skip API call in offline mode)
+            if not self.offline_mode and self.conductor_id is None:
                 print("⚠️  No se especificó ID de conductor")
                 # Try to get first available driver
-                drivers = self.api_client.get_drivers()
-                if drivers:
-                    self.conductor_id = drivers[0].get("id_conductor")
-                    print(f"📋 Usando conductor: {drivers[0].get('nombre')} (ID: {self.conductor_id})")
-                else:
-                    print("❌ No hay conductores disponibles en el sistema")
-                    return
+                try:
+                    drivers = self.api_client.get_drivers()
+                    if drivers:
+                        self.conductor_id = drivers[0].get("id_conductor")
+                        print(f"📋 Usando conductor: {drivers[0].get('nombre')} (ID: {self.conductor_id})")
+                    else:
+                        print("❌ No hay conductores disponibles en el sistema")
+                        return
+                except Exception as e:
+                    print(f"⚠️  Error obteniendo conductores: {e}")
+                    print("Usando conductor por defecto: ID 1")
+                    self.conductor_id = 1
 
-            # Step 3: Wait for active trip
+            # Step 3: Wait for active trip (or use mock in offline mode)
             trip = self.get_or_wait_for_active_trip()
             if not trip:
                 print("❌ No se pudo obtener viaje activo")
@@ -317,7 +366,10 @@ class AutoDetector:
             print("=" * 60)
             print(f"📍 Viaje: #{self.viaje_id}")
             print(f"👤 Conductor: ID {self.conductor_id}")
-            print(f"🔗 API: {self.api_client.base_url}")
+            if self.offline_mode:
+                print(f"🔗 API: OFFLINE (modo prueba)")
+            else:
+                print(f"🔗 API: {self.api_client.base_url}")
             print(f"⚙️  Umbral PERCLOS: {self.thresholds['PERCLOS_THRESH']}%")
             print("=" * 60 + "\n")
 
@@ -381,6 +433,8 @@ class AutoDetector:
                     print(f"   {'='*50}")
                     print(f"   • Frames: {frame_count} | FPS: {fps:.1f}")
                     print(f"   • Viaje ID: {self.viaje_id}")
+                    if self.offline_mode:
+                        print(f"   • Modo: OFFLINE (sin API)")
                     print()
 
                     last_status_time = current_time
@@ -404,7 +458,7 @@ class AutoDetector:
         print("\n🧹 Limpiando recursos...")
 
         self.running = False
-        
+
         # Stop alarm if playing
         if self.alarm_playing:
             print("⏹️  Deteniendo alarma...")
@@ -435,13 +489,13 @@ def main():
         "--conductor-id",
         type=int,
         default=None,
-        help="ID del conductor (opcional, se detectará automáticamente)"
+        help="ID del conductor (opcional, se detectará automáticamente o usará 1 en modo offline)"
     )
     parser.add_argument(
         "--api-url",
         type=str,
         default=os.getenv("RISK_ADVISOR_API_URL", "http://192.168.100.82:8000"),
-        help="URL del backend API"
+        help="URL del backend API (ignorado en modo offline)"
     )
     parser.add_argument(
         "--camera",
@@ -452,8 +506,13 @@ def main():
     parser.add_argument(
         "--perclos-threshold",
         type=float,
-        default=30.0,
+        default=15.0,
         help="Umbral PERCLOS en porcentaje (default: 15.0)"
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Ejecutar en modo offline sin conexión al backend (para pruebas)"
     )
 
     args = parser.parse_args()
@@ -462,7 +521,8 @@ def main():
     detector = AutoDetector(
         conductor_id=args.conductor_id,
         api_url=args.api_url,
-        camera_index=args.camera
+        camera_index=args.camera,
+        offline_mode=args.offline
     )
 
     # Set threshold
