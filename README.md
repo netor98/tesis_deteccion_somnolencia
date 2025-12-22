@@ -1,132 +1,71 @@
-# Driver Drowsiness Detection System
-
-A comprehensive real-time driver drowsiness detection system using MediaPipe FaceMesh. The system detects multiple indicators of drowsiness including eye closure, yawning, and head pose (tilt).
-
-## Features
-
-- **Eye Closure Detection**: Monitors Eye Aspect Ratio (EAR) to detect when eyes are closed
-- **Yawning Detection**: Tracks Mouth Aspect Ratio (MAR) to detect yawning
-- **Head Pose Detection**: Monitors head tilt in three dimensions (roll, pitch, yaw)
-- **Real-time Processing**: Uses WebRTC for real-time video and audio streaming
-- **Configurable Thresholds**: Adjustable detection thresholds via Streamlit UI
-- **Audio Alerts**: Plays alarm sound when drowsiness is detected
+This project is a real-time drowsiness detection system designed for drivers. It uses computer vision and possibly audio cues to monitor the
+driver’s alertness and trigger alarms if signs of drowsiness are detected. The goal: keep drivers awake, alive, and on the road—not in a
+ditch.
 
 ## Project Structure
 
-```
-drowsiness/
-├── drowsiness_detector/          # Main package
-│   ├── __init__.py              # Package initialization
-│   ├── config.py                # Configuration constants and defaults
-│   ├── detection.py             # Detection algorithms and VideoFrameHandler
-│   ├── audio_handler.py        # Audio processing and alarm playback
-│   └── utils.py                # Utility functions
-├── audio/                       # Audio assets
-│   └── wake_up.wav             # Alarm sound file
-├── streamlit_app.py            # Main Streamlit application
-├── requirements.txt            # Python dependencies
-└── README.md                   # This file
-```
+• drowsiness_detector/ – Core detection logic (video/audio analysis, config, utils)
+• audio/ – Alarm sounds (e.g., wake_up.wav)
+• prolog_kb/ – Prolog knowledge base (for advanced logic/rules, maybe for demo or research)
+• standalone_detector.py – Main script for running detection standalone
+• streamlit_app.py – Web UI for demo/testing (Streamlit)
+• auto_start.py, drowsiness-detector.service – Scripts/services for auto-start (e.g., on Raspberry Pi)
+• requirements.txt – Python dependencies
+• README.md – (You’re reading it)
+
+## Features
+
+• Real-time drowsiness detection using camera (and possibly audio)
+• Alarm triggers (audio alert) when drowsiness is detected
+• Can run as a standalone script or as a web app (Streamlit)
+• Designed for Raspberry Pi or similar embedded systems
+• Knowledge base integration (Prolog) for advanced rule-based logic (optional/experimental)
 
 ## Installation
 
-1. **Clone or download the repository**
+### 1. Clone the repo
 
-2. **Create a virtual environment** (recommended):
-   ```bash
-   python -m venv env
-   source env/bin/activate  # On Windows: env\Scripts\activate
-   ```
+git clone <YOUR_REPO_URL>
+cd drowsiness
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. Install dependencies
 
-## Usage
+pip install -r requirements.txt
 
-1. **Start the Streamlit application**:
-   ```bash
-   streamlit run streamlit_app.py
-   ```
+### 3. (Optional) Enable auto-start
 
-2. **Configure thresholds** in the web interface:
-   - **Wait Time**: Time (in seconds) before alarm triggers
-   - **Eye Separation (EAR)**: Threshold for eye closure detection (ideal: 0.15-0.2)
-   - **Mouth Separation (MAR)**: Threshold for yawning detection (ideal: 0.5-0.7)
-   - **Head Tilt Thresholds**: Roll, Pitch, and Yaw angles in degrees
+See drowsiness-detector.service and auto_start.py for running as a background service.
 
-3. **Allow camera and microphone access** when prompted
+### Standalone Detector (CLI)
 
-4. **Monitor the video feed** for real-time detection metrics
+python standalone_detector.py
 
-## Detection Metrics
+• This will start the detection loop using your default camera.
+• When drowsiness is detected, an alarm sound will play.
 
-### Eye Aspect Ratio (EAR)
-- Measures the ratio of eye width to height
-- Lower values indicate closed eyes
-- Default threshold: 0.18
+### Streamlit Web App
 
-### Mouth Aspect Ratio (MAR)
-- Measures mouth opening
-- Higher values indicate yawning
-- Default threshold: 0.6
+streamlit run streamlit_app.py
 
-### Head Pose Angles
-- **Roll**: Left/right head tilt (default: 20°)
-- **Pitch**: Up/down nodding (default: 15°)
-- **Yaw**: Left/right head turning (default: 15°)
+• Launches a web interface for testing/demo purposes.
+
+### (Optional) Prolog Knowledge Base
+
+• See prolog_kb/ and prolog_engine.py for integrating rule-based logic.
+
+## Hardware Requirements
+
+• Camera (USB or PiCam)
+• (Optional) Speakers for audio alarm
+• (Recommended) Raspberry Pi 4 or better for embedded use
 
 ## Configuration
 
-Default thresholds can be modified in `drowsiness_detector/config.py`:
+• Edit drowsiness_detector/config.py to tweak detection thresholds, alarm settings, etc.
 
-```python
-DEFAULT_THRESHOLDS = {
-    "EAR_THRESH": 0.18,
-    "MAR_THRESH": 0.6,
-    "WAIT_TIME": 1.0,
-    "ROLL_THRESH": 20.0,
-    "PITCH_THRESH": 15.0,
-    "YAW_THRESH": 15.0,
-}
-```
+## How it Works (High-Level)
 
-## Dependencies
-
-- `streamlit` - Web application framework
-- `streamlit-webrtc` - WebRTC integration for real-time streaming
-- `mediapipe` - Face detection and landmark extraction
-- `opencv-python` - Image processing
-- `numpy` - Numerical operations
-- `pydub` - Audio processing
-- `av` - Audio/video frame handling
-
-## Technical Details
-
-### Detection Algorithms
-
-1. **EAR Calculation**: Uses 6 facial landmarks per eye to calculate the eye aspect ratio
-2. **MAR Calculation**: Uses 8 mouth landmarks to calculate mouth opening ratio
-3. **Head Pose**: Calculates roll, pitch, and yaw angles using key facial landmarks
-
-### Architecture
-
-- **Modular Design**: Separated into detection, audio handling, and configuration modules
-- **State Tracking**: Maintains temporal state for each detection metric
-- **Thread-Safe**: Uses locks for shared state between video and audio callbacks
-
-## Troubleshooting
-
-- **Camera not working**: Ensure camera permissions are granted in your browser
-- **Audio not playing**: Check that the `audio/wake_up.wav` file exists
-- **Poor detection**: Adjust thresholds in the UI or ensure good lighting conditions
-
-## License
-
-This project is provided as-is for educational and research purposes.
-
-## Contributing
-
-Contributions are welcome! Please ensure code follows the existing structure and style.
-
+1. Captures video frames from the camera.
+2. Analyzes facial features (eyes, mouth) to detect signs of drowsiness (e.g., eye closure, yawning).
+3. If drowsiness is detected, triggers an alarm sound.
+4. (Optional) Uses Prolog rules for more complex detection logic.
